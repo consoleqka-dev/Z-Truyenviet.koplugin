@@ -185,6 +185,46 @@ function Source:getGenre(genre, page)
     }
 end
 
+-- Dòng "Tình trạng: Hoàn thành" trên trang truyện.
+local function parseStatus(html)
+    local status = html:match('Tình trạng:%s*([^<\n]+)')
+    if status then status = Util.trim(status) end
+    if status == "" then return nil end
+    return status
+end
+
+-- Meta nhẹ cho danh sách duyệt/tìm kiếm: đúng 1 request vào trang truyện (site chưa có
+-- search nên chủ yếu phục vụ danh sách thể loại). Số chương = số thứ tự của "Mới nhất:",
+-- dự phòng đếm mục story-chap-item (cả hai khớp nhau trên các trang đã kiểm tra, danh sách
+-- chương nằm trọn trên 1 trang). completed = true khi tình trạng là "Hoàn thành"/"Full".
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, stdHeaders(self.base_url))
+    if not html then return nil, err end
+
+    local meta = {}
+    local latest = tonumber(html:match('Mới nhất:%s*<a[^>]*>%s*Chương%s+(%d+)'))
+    if latest and latest > 0 then
+        meta.latest_chapter = latest
+    else
+        local items = 0
+        for _ in html:gmatch('class="story%-chap%-item"') do items = items + 1 end
+        if items > 0 then meta.chapter_count = items end
+    end
+
+    local status = parseStatus(html)
+    if status then
+        local normalized = Util.normalizeSearch(status)
+        meta.completed = normalized:find("hoan thanh", 1, true) ~= nil
+            or normalized:find("full", 1, true) ~= nil
+    end
+
+    if meta.latest_chapter == nil and meta.chapter_count == nil
+            and meta.completed == nil then
+        return nil, "Không đọc được số chương/trạng thái"
+    end
+    return meta
+end
+
 function Source:getStoryDetails(story)
     local html, err = Http:get(story.url, stdHeaders(self.base_url))
     if not html then return nil, err end
@@ -193,8 +233,7 @@ function Source:getStoryDetails(story)
     local author = html:match('Tác giả:%s*<[^>]+>%s*<strong>([^<]+)</strong>')
         or html:match('Tác giả:%s*<strong>([^<]+)</strong>')
 
-    local status = html:match('Tình trạng:%s*([^<\n]+)')
-    if status then status = Util.trim(status) end
+    local status = parseStatus(html)
 
     -- Thể loại: trang chi tiết thật có 1 dòng liệt kê nhiều link thể loại
     -- ngay dưới ảnh bìa (vd "Truyện ma · Truyện ma dài kỳ · Truyện kinh dị").

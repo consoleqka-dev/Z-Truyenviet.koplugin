@@ -21,6 +21,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 
 local Storage = require("truyenviet/storage")
+local Windows = require("truyenviet/windows")
 
 local Screen = Device.screen
 local Input = Device.input
@@ -105,6 +106,29 @@ local FontHelper = require("truyenviet/font_helper")
         VerticalSpan:new{ width = padding },
         self.source_widget,
     }
+    -- Dòng 3 ở Tủ truyện: dung lượng file trên máy (size_bytes do annotate tính).
+    local size_bytes = tonumber(self.story.size_bytes)
+    if size_bytes and size_bytes > 0 then
+        local LocalLibrary = require("truyenviet/local_library")
+        table.insert(text_group, VerticalSpan:new{ width = Size.padding.small })
+        table.insert(text_group, TextWidget:new{
+            text = "Dung lượng: " .. LocalLibrary.formatSize(size_bytes),
+            face = FontHelper:getFace("xx_smallinfofont"),
+            max_width = text_width,
+        })
+    end
+    local row = HorizontalGroup:new{
+        align = "center",
+        CenterContainer:new{
+            dimen = Geom:new{ w = cover_width, h = cover_height },
+            cover_widget,
+        },
+        HorizontalSpan:new{ width = padding * 2 },
+        LeftContainer:new{
+            dimen = Geom:new{ w = text_width, h = cover_height },
+            text_group,
+        },
+    }
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
@@ -112,18 +136,7 @@ local FontHelper = require("truyenviet/font_helper")
         margin = 0,
         bordersize = border,
         background = Blitbuffer.COLOR_WHITE,
-        HorizontalGroup:new{
-            align = "center",
-            CenterContainer:new{
-                dimen = Geom:new{ w = cover_width, h = cover_height },
-                cover_widget,
-            },
-            HorizontalSpan:new{ width = padding * 2 },
-            LeftContainer:new{
-                dimen = Geom:new{ w = text_width, h = cover_height },
-                text_group,
-            },
-        },
+        row,
     }
 
     if Device:isTouchDevice() then
@@ -136,9 +149,61 @@ local FontHelper = require("truyenviet/font_helper")
     end
 end
 
+local function numberLabel(value)
+    return value % 1 == 0 and string.format("%d", value) or tostring(value)
+end
+
+-- Phần "Đã tải X/N" của Tủ truyện (story.offline_count chỉ có ở Tủ truyện).
+local function offlineText(story)
+    if story.kind == "local" then
+        local files = tonumber(story.offline_count)
+        if story.local_type == "dir" then
+            return string.format("Trên máy · %d tập", files or 0)
+        elseif not story.local_type then
+            -- Lịch sử đọc: chưa kiểm tra file nên không ghi loại.
+            return "Trên máy"
+        end
+        return "Trên máy · " .. tostring(story.local_type):upper()
+    end
+    local downloaded = tonumber(story.offline_count) or 0
+    if downloaded <= 0 then
+        return " · Chưa tải"
+    end
+    local total = tonumber(story.chapter_count)
+    if not total or total <= 0 then
+        total = tonumber(story.latest_chapter)
+    end
+    if total and total > 0 then
+        return string.format(" · Đã tải %d/%s", downloaded, numberLabel(total))
+    end
+    return string.format(" · Đã tải %d chương", downloaded)
+end
+
 function StoryItem:getSourceText()
-    local favorite = Storage:isFavorite(self.story) and "  ★" or ""
-    return tostring(self.story.source_name or self.story.source_id) .. favorite
+    if self.story.kind == "local" then
+        return offlineText(self.story)
+    end
+    local in_library = self.story.offline_count ~= nil
+    -- Mọi mục trong Tủ truyện đều là yêu thích nên không cần dấu sao.
+    local favorite = not in_library and Storage:isFavorite(self.story) and "  ★" or ""
+    -- Ưu tiên "Chương N" (chương mới nhất); nguồn chỉ biết tổng thì hiện
+    -- "N chương".
+    local latest = tonumber(self.story.latest_chapter)
+    local chapter_count = tonumber(self.story.chapter_count)
+    local progress = ""
+    if latest and latest > 0 then
+        progress = " · Chương " .. numberLabel(latest)
+    elseif chapter_count and chapter_count > 0 then
+        progress = string.format(" · %d chương", chapter_count)
+    end
+    if self.story.completed then
+        progress = progress .. " · Hoàn thành"
+    end
+    if in_library then
+        progress = progress .. offlineText(self.story)
+    end
+    return tostring(self.story.source_name or self.story.source_id)
+        .. progress .. favorite
 end
 
 function StoryItem:refreshFavorite()
@@ -176,6 +241,7 @@ local StoryResults = InputContainer:extend{
 }
 
 function StoryResults:init()
+    Windows.track(self)
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     self.dimen = Geom:new{ x = 0, y = 0, w = self.width, h = self.height }
@@ -338,6 +404,7 @@ function StoryResults:init()
             UIManager:setDirty(self, "ui")
         end,
     }
+    self:showStoryPage(self.focus_story)
 
     self[1] = FrameContainer:new{
         padding = 0,
@@ -406,6 +473,25 @@ function StoryResults:removeStory(story)
     return true
 end
 
+-- Chuyển tới trang chứa truyện (truyện vừa mở) khi quay lại danh sách.
+function StoryResults:showStoryPage(story)
+    local per_page = self.list and self.list.items_per_page
+    if not story or not per_page or per_page < 1 then
+        return false
+    end
+    for index, item in ipairs(self.story_items) do
+        if isSameStory(item.story, story) then
+            local page = math.ceil(index / per_page)
+            if page ~= self.list.show_page then
+                self.list.show_page = page
+                self.list:_populateItems()
+            end
+            return true
+        end
+    end
+    return false
+end
+
 function StoryResults:onNextPage()
     self.list:nextPage()
     return true
@@ -429,5 +515,15 @@ function StoryResults:onClose()
     end
     return true
 end
+
+function StoryResults:onCloseWidget()
+    Windows.untrack(self)
+    if InputContainer.onCloseWidget then
+        return InputContainer.onCloseWidget(self)
+    end
+end
+
+-- Công khai StoryItem để spec kiểm tra định dạng dòng phụ (nguồn · số chương · trạng thái)
+StoryResults.StoryItem = StoryItem
 
 return StoryResults

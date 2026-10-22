@@ -15,6 +15,94 @@ local function stdHeaders(base_url)
     }
 end
 
+local CARD_MARKER = '<div class="col-sm-12 col-md-6 story">'
+
+-- Bóc số chương + trạng thái hoàn thành từ từng thẻ truyện (tách theo CARD_MARKER),
+-- trả về bảng meta_by_url[url] = { chapter_count = n|nil, completed = bool }:
+--   <span class="full-label"></span> chỉ xuất hiện khi truyện đã hoàn thành
+--   <span class="part-count"><svg>...</svg> 198</span> là số chương (có thể kèm dấu . hoặc ,)
+-- Mỗi thẻ được cắt tới đoạn mô tả (<p class="crop-text-2 desc">) để không dính sidebar ở thẻ cuối.
+local function parseCardMeta(html)
+    local meta_by_url = {}
+    local pos = 1
+    while true do
+        local s, e = html:find(CARD_MARKER, pos, true)
+        if not s then break end
+        local next_s = html:find(CARD_MARKER, e + 1, true)
+        local block = html:sub(e + 1, (next_s or (#html + 1)) - 1)
+        local desc_s = block:find('<p class="crop%-text%-2 desc"')
+        if desc_s then
+            block = block:sub(1, desc_s - 1)
+        elseif #block > 8000 then
+            block = block:sub(1, 8000)
+        end
+
+        local url = block:match('href="(https?://aztruyen%.top/[%w%-]+%-%d+/)"')
+        if url and not meta_by_url[url] then
+            local raw_count = block:match('class="part%-count">.-</svg>%s*([%d%.,]+)%s*</span>')
+            local count = raw_count and tonumber((raw_count:gsub("[%.,]", "")))
+            meta_by_url[url] = {
+                chapter_count = (count and count > 0) and count or nil,
+                completed = block:find('<span class="full-label">', 1, true) ~= nil,
+            }
+        end
+        pos = e + 1
+    end
+    return meta_by_url
+end
+
+local function applyCardMeta(stories, html)
+    local meta_by_url = parseCardMeta(html)
+    for _, story in ipairs(stories) do
+        local meta = meta_by_url[story.url]
+        if meta then
+            story.chapter_count = meta.chapter_count
+            story.completed = meta.completed
+        end
+    end
+end
+
+-- Tên chương trên AzTruyen không thống nhất: "Chương 75", "Chương 12 - Tiêu đề", "Tiên Nghịch 1801-1850",
+-- "851-881 (end)", "cực phẩm nữ tiên 176", "170 (Ngoại Truyện)". Quy tắc lấy số (theo thứ tự ưu tiên):
+--   1. số ngay sau từ khoá "chương"/"chapter"/"chap" (giữ phần thập phân);
+--   2. khoảng "a-b" thì lấy b; "a-end" thì lấy a (chặn dưới đã biết);
+--   3. số cuối cùng trong tên. Tên không có số (vd "Lời giới thiệu") trả nil.
+local CHAPTER_KEYWORDS = { "chương", "chƯƠng", "chapter", "chap" }
+
+local function extractChapterNumber(title)
+    if not title then return nil end
+    local lower = title:lower()
+    for _, keyword in ipairs(CHAPTER_KEYWORDS) do
+        local n = tonumber(lower:match(keyword .. "%s*[:%-]?%s*(%d+%.?%d*)"))
+        if n and n > 0 then return n end
+    end
+    local range_end = tonumber(lower:match("%d+%s*%-%s*(%d+)"))
+    if range_end and range_end > 0 then return range_end end
+    local open_end = tonumber(lower:match("(%d+)%s*%-%s*end"))
+    if open_end and open_end > 0 then return open_end end
+    local last
+    for num in lower:gmatch("%d+%.?%d*") do last = num end
+    local n = tonumber(last)
+    if n and n > 0 then return n end
+    return nil
+end
+
+-- Chương mới nhất nằm trong khối "Chương mới nhất" (5 chương cuối, cũ -> mới) của trang truyện.
+-- Lấy số lớn nhất trong khối; nếu site bỏ khối này thì lấy số lớn nhất của cả danh sách chương.
+local function parseLatestChapter(html)
+    local function maxNumber(fragment)
+        local best
+        for label in fragment:gmatch('<li class="listc">%s*<a[^>]*>([^<]*)</a>') do
+            local n = extractChapterNumber(Util.decodeHtml(label))
+            if n and (not best or n > best) then best = n end
+        end
+        return best
+    end
+
+    local block = html:match('Chương mới nhất</div>%s*<ul class="chapters">(.-)</ul>')
+    return (block and maxNumber(block)) or maxNumber(html)
+end
+
 -- Cấu trúc thẻ truyện thật đã xác nhận bằng fetch trực tiếp aztruyen.top ngày 11/07/2026:
 --   URL truyện dạng: https://aztruyen.top/{slug}-{id}/   (id số ở cuối, có dấu / kết thúc)
 --   Ảnh bìa dạng:    https://aztruyen.top/images/{slug}-{id}.webp   (cùng domain, đuôi .webp)
@@ -83,6 +171,7 @@ local function parseStories(html, source_id)
         end
     end
 
+    applyCardMeta(stories, html)
     return stories
 end
 
@@ -108,6 +197,16 @@ function Source:search(query)
     if not html then return nil, err end
     local stories = parseStories(html, self.id)
     return stories
+end
+
+-- Chương mới nhất cho kết quả tìm kiếm: thẻ trong trang tìm kiếm không có tên chương nên đọc
+-- khối "Chương mới nhất" của trang truyện (đúng 1 request). Số chương/hoàn thành đã lấy từ thẻ.
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, stdHeaders(self.base_url))
+    if not html then return nil, err end
+    local latest = parseLatestChapter(html)
+    if not latest then return nil, "Không đọc được chương mới nhất" end
+    return { latest_chapter = latest }
 end
 
 function Source:getCompleted(page)

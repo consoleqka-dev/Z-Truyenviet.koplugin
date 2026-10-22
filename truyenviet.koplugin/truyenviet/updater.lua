@@ -292,7 +292,7 @@ function Updater:showUpdateDialog(info, on_cancel)
 
     local dialog
     dialog = ConfirmBox:new{
-        title = "🚀 Bản Cập Nhật Mới - Truyện Việt",
+        title = "⚡ Bản Cập Nhật Mới - Truyện Việt",
         text = message,
         ok_text = "Cập nhật ngay",
         ok_callback = function()
@@ -326,7 +326,7 @@ function Updater:performUpdateWithUI(download_url, latest_version, on_finish)
 
         if success then
             local success_box = ConfirmBox:new{
-                title = "Cập nhật thành công! 🎉",
+                title = "Cập nhật thành công!",
                 text = string.format(
                     "Đã nâng cấp Truyện Việt lên phiên bản %s!\n\nBạn có muốn khởi động lại KOReader ngay bây giờ để áp dụng phiên bản mới không?",
                     latest_version
@@ -360,7 +360,7 @@ function Updater:checkManually(on_return)
     local UIManager = require("ui/uimanager")
     local InfoMessage = require("ui/widget/infomessage")
     local ConfirmBox = require("ui/widget/confirmbox")
-    local NetworkMgr = require("ui/network/networkmgr")
+    local NetworkMgr = require("ui/network/manager")
     local Trapper = require("ui/trapper")
 
     NetworkMgr:runWhenOnline(function()
@@ -418,7 +418,7 @@ function Updater:scheduleBackgroundCheck()
     end
 
     local UIManager = require("ui/uimanager")
-    local NetworkMgr = require("ui/network/networkmgr")
+    local NetworkMgr = require("ui/network/manager")
 
     -- Chờ 8 giây sau khi khởi động để hệ thống ổn định
     UIManager:scheduleIn(8, function()

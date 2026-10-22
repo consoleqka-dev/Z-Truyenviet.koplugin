@@ -1,3 +1,174 @@
+## 3.17.8 (BUILD-1391) - 2026-10-22
+
+### Bug Fixes
+- **Exit về màn Lịch sử thay vì thoát KOReader**: khi KOReader khởi động vào Lịch sử (hoặc đang mở Bộ sưu tập) rồi Truyện Việt mở một chương, danh sách đó vẫn nằm dưới reader. Exit chỉ đóng reader, còn danh sách đó nên KOReader không thoát mà hiện Lịch sử. KOReader tự đóng Lịch sử/Bộ sưu tập khi mở sách từ đó; nay Truyện Việt cũng đóng chúng trước khi mở chương, nên Exit thoát hẳn. Đóng chương rồi đóng Truyện Việt sẽ về trình duyệt file thay vì Lịch sử.
+
+### Tests
+- `spec/reader_test.lua`: mở chương đóng Lịch sử và Bộ sưu tập (của trình duyệt file và của reader) trước khi mở reader, kể cả khi chuyển chương; không có danh sách nào cũng không lỗi.
+
+## 3.17.7 (BUILD-1390) - 2026-10-22
+
+### Bug Fixes
+- **Exit không thoát KOReader khi đang đọc chương của Truyện Việt**: Exit (hay Restart) trong menu KOReader chỉ đóng reader rồi để KOReader tự thoát khi không còn cửa sổ nào. Plugin lại mở danh sách chương khi reader đóng, nên KOReader quay về danh sách chương thay vì thoát. Nay khi KOReader Exit/Restart, plugin kết thúc phiên đọc mà không mở lại Truyện Việt. Đóng chương bình thường vẫn quay về danh sách chương như cũ.
+- **Log khi reader đóng**: mỗi lần reader đóng ghi một dòng vào `truyenviet-debug.txt` kèm lý do (KOReader Exit/Restart, Truyện Việt đóng chương, quay về Truyện Việt, chương cũ khi chuyển chương).
+
+### Tests
+- `spec/reader_test.lua`: Exit và Restart không mở lại danh sách chương và không chặn sự kiện của KOReader; reader mở sau đó vẫn quay về plugin khi đóng.
+
+## 3.17.6 (BUILD-1389) - 2026-10-22
+
+### Bug Fixes
+- **Hết chương bấm next không sang chương tiếp**: mở một chương từ Truyện Việt khi chương khác vẫn đang mở (ví dụ đang đọc truyện A rồi mở chương của truyện B) thì reader cũ đóng sau khi chương mới đã mở và tắt phiên đọc của plugin. Từ đó hết chương hay chọn "Chương tiếp theo" đều không làm gì. Nay mỗi lần mở chương là một phiên riêng; reader cũ đóng muộn không còn tắt phiên mới hay mở lại màn Truyện Việt.
+- **Nhiều cửa sổ Truyện Việt chồng lên nhau**: mỗi lần mở Truyện Việt (menu, cử chỉ, nút trên thanh tiêu đề, tự mở khi khởi động) trước đây thêm một lớp cửa sổ mới. Nay mở trang chủ thì đóng hết cửa sổ Truyện Việt cũ (không mở lại màn trước của chúng). Nếu đang đọc chương mở từ Truyện Việt thì chương được đóng trước (KOReader vẫn lưu vị trí đọc) rồi mới mở trang chủ. Sách mở ngoài plugin không bị đóng.
+
+### Tests
+- `spec/reader_test.lua`: chuyển chương khi reader còn mở, hết chương rồi sang chương tiếp, đóng reader bình thường vẫn quay về plugin.
+- `spec/single_window_test.lua`: mở trang chủ nhiều lần chỉ còn một cửa sổ, cửa sổ cũ không chạy callback quay về, đóng chương của plugin trước khi mở trang chủ, không đụng sách mở ngoài plugin.
+
+## 3.17.5 (BUILD-1388) - 2026-10-22
+
+### Features & Improvements
+- **Mở Truyện Việt khi khởi động KOReader**: tuỳ chọn mới trong menu Truyện Việt của KOReader (mặc định tắt). Plugin tự mở Truyện Việt một lần mỗi lần KOReader khởi động, nằm trên màn Lịch sử / Yêu thích nếu KOReader mở vào đó. Không dùng profile "on KOReader start" vì khi KOReader khởi động vào màn Lịch sử, sự kiện của profile chỉ tới màn Lịch sử và bị bỏ qua.
+- **"Chương X/Y" khi mở chương từ bất kỳ đâu**: file nằm trong thư mục tải của plugin (`truyenviet/<nguồn>/<truyện>/`) mở từ Lịch sử, trình duyệt file của KOReader... hiện vị trí trong số chương đã tải của truyện đó. Mở từ danh sách chương của Truyện Việt vẫn hiện vị trí trên tổng số chương của mục lục như BUILD-1387.
+
+### Tests
+- `spec/open_on_start_test.lua`: tuỳ chọn tắt mặc định, chỉ mở một lần mỗi lần khởi động, công tắc trong menu.
+- `spec/chapter_position_test.lua`: `ChapterPosition.downloadFolder` (đúng cấp thư mục, bỏ `cache`, `/sdcard` và `/storage/emulated/0`).
+- `spec/reader_test.lua`: vị trí theo số chương đã tải và thứ tự ưu tiên với vị trí từ danh sách chương.
+
+## 3.17.4 (BUILD-1387) - 2026-10-22
+
+### Features & Improvements
+- **Vị trí chương trên thanh trạng thái**: khi mở chương từ danh sách chương của Truyện Việt, thanh trạng thái hiện "Chương 14/20" theo thứ tự đọc (chương cũ nhất là 1, kể cả khi mục lục xếp mới nhất trước). Mục lục chia nhiều trang hiện thêm "· trang 2/5" vì chỉ biết số chương của trang đang mở. File trong thư mục "Trên máy" hiện "Tập 3/12" theo số file đọc được trong thư mục. Số tự cập nhật khi chuyển chương trước/sau. File mở thẳng từ trình duyệt file của KOReader không hiện gì. Dùng mục "External content" của thanh trạng thái (bật trong menu thanh trạng thái nếu đang tắt).
+
+### Tests
+- `spec/chapter_position_test.lua`: thứ tự đọc, mục lục nhiều trang, chương đã tải, thư mục "Trên máy" qua `/sdcard` và `/storage/emulated/0`.
+- `spec/reader_test.lua`: `Reader:setPosition` / `Reader:positionText`.
+
+## 3.17.3 (BUILD-1386) - 2026-10-22
+
+### Bug Fixes
+- **Cử chỉ và profile mở Truyện Việt không chạy ở trình duyệt file / Lịch sử**: các action đăng ký kèm `reader = true`, mà Dispatcher của KOReader hiểu cờ này là "chỉ khi đang đọc sách" nên bỏ qua lệnh ở màn Home. Vì vậy chạm góc gán "Truyện Việt" và profile tự chạy lúc khởi động không làm gì. Đã bỏ cờ này ở 6 action chung: mở Truyện Việt, Tiếp tục đọc, Lịch sử đọc, Đã tải xuống, Tải từ Google Drive, Kiểm tra cập nhật OTA. Danh sách chương, Chương tiếp/trước, Về nguồn vẫn chỉ chạy khi đang đọc. Tên action không đổi nên cử chỉ và profile đã gán tự hoạt động lại.
+
+### Tests
+- `spec/dispatcher_actions_test.lua`: cờ của các action và khả năng chạy trong trình duyệt file / khi đọc.
+
+## 3.17.2 (BUILD-1385) - 2026-10-22
+
+### Bug Fixes
+- **Bìa file "Trên máy" trong Lịch sử đọc** (vd. PDF "How to Design Better UI Components"): `showStories` chỉ đọc bìa cho truyện có nguồn trong `SourceRegistry`, mà mục "Trên máy" không có nguồn nên bị bỏ qua. Tủ truyện vẫn có bìa vì đi qua `LocalLibrary.annotate`. Giờ mục "Trên máy" cũng lấy bìa từ CoverCache và hiện tên nguồn "Trên máy".
+
+### Tests
+- `spec/chapter_list_flow_test.lua`: bìa và tên nguồn của mục "Trên máy" trong `showStories`.
+
+## 3.17.1 (BUILD-1384) - 2026-10-22
+
+### Bug Fixes
+- **Quay lại đúng trang**: mở một truyện ở trang 2, 3… của Tủ truyện (hoặc danh sách tìm kiếm, Lịch sử đọc) rồi back thì danh sách mở lại ở trang chứa truyện đó thay vì trang 1. Áp dụng cho cả mục "Trên máy" và sau "Chỉ xóa chương đã tải".
+- **Bìa trong Lịch sử đọc**: lịch sử lưu bản chụp truyện lúc đọc nên thiếu bìa tìm được sau đó (bìa từ nguồn khác, bìa trích từ file). Giờ Lịch sử đọc lấy bìa của mục Tủ truyện tương ứng.
+
+### Tests
+- `spec/story_results_test.lua`: `StoryResults:showStoryPage`.
+- `spec/local_history_size_test.lua`: `LocalLibrary.copyFavoriteCovers`.
+
+## 3.17.0 (BUILD-1383) - 2026-10-22
+
+### Features & Improvements
+- **Mở truyện từ Tủ truyện nhanh hơn**: mục lục của mỗi trang được lưu lại (`chapter_cache`, tối đa 120 file). Lần mở sau hiện ngay từ bản lưu, không chờ mạng. Bản lưu quá 10 phút thì lấy lại trong tiến trình nền (`background_fetch`), xong thì cập nhật danh sách tại chỗ, giữ trang đang xem.
+- **Dòng trạng thái đầu mục lục**: "⟳ Đang lấy chương mới…", "Có N chương mới · HH:MM", "Đã là mới nhất · HH:MM", "Cập nhật lúc HH:MM · chạm để làm mới", "Không cập nhật được · chạm để thử lại", "Ngoại tuyến · danh sách lưu lúc HH:MM". Chạm (trừ lúc đang lấy) để tải lại ngay. Lần đầu mở một truyện thì không có dòng này.
+- **Chương sau/trước tìm lúc bấm**: đọc tới chương cuối trong lúc đang làm mới thì chuyển được sang chương vừa có; nếu chưa xong thì báo "Đang lấy chương mới, thử lại sau giây lát.".
+- **Chỉ xóa chương đã tải, giữ trong Tủ truyện** (truyện online): nút trong hộp xóa truyện và trong menu giữ truyện ("Xóa chương đã tải… (N file · X)"). Với thư mục gắn ngoài chỉ xóa file trùng tên chương do plugin đặt (theo mục lục đã lưu), kèm `.sdr`.
+- Mở lại truyện không đổi gì thì không ghi lại file settings; dung lượng thư mục trong Tủ truyện được nhớ trong phiên (tính lại khi thư mục hoặc thư mục con trực tiếp đổi).
+
+### Tests
+- `spec/chapter_cache_test.lua`, `spec/background_fetch_test.lua`, `spec/chapter_list_flow_test.lua` (luồng mở mục lục với widget giả).
+- Mở rộng `spec/storage_test.lua`, `spec/local_history_size_test.lua`, `spec/favorite_removal_test.lua`.
+
+## 3.16.1 (BUILD-1382) - 2026-10-22
+
+### Bug Fixes
+- **KOReader crash khi mở lại Truyện Việt** sau khi đọc một file "Trên máy" có tên dài (ví dụ PDF Jeff Johnson): dòng "▶ Tiếp tục" ở menu gốc đặt tên file vào cột bên phải, mà Menu của KOReader không giới hạn cột này → phần tên còn lại có độ rộng âm và `textwidget.lua` báo `makeLine (width must be strictly positive)`. Cột bên phải giờ rút gọn còn tối đa 24 ký tự (thêm "…"), và bỏ hẳn khi tên tập trùng tên truyện (file lẻ). Tên tác giả trong kết quả Dilib cũng được rút gọn như vậy.
+
+### Tests
+- `spec/shorten_test.lua`: `Util.shorten` (ASCII, tiếng Việt nhiều byte, đúng giới hạn, nil).
+
+## 3.16.0 (BUILD-1381) - 2026-10-22
+
+### Features & Improvements
+- **Dung lượng trong Tủ truyện**: dòng thứ 3 "Dung lượng: X" (file plugin tải về, thư mục đã gắn, file/thư mục "Trên máy" kèm `.sdr`).
+- **Xóa truyện hiện dung lượng**: nút "Xóa … (N file · X)", hộp xác nhận ghi tổng và dung lượng từng đường dẫn; chế độ chọn nhiều hiện dung lượng từng truyện và tổng các truyện đã chọn.
+
+### Bug Fixes
+- **Lịch sử đọc bỏ sót mục "Trên máy"** (ví dụ VAGABOND): file mở trực tiếp không đi qua trình đọc của plugin nên không được ghi. Giờ mỗi lần KOReader mở một file thuộc mục "Trên máy" (từ Tủ truyện, File manager hay lịch sử KOReader; `/sdcard` và `/storage/emulated/0` coi là một) thì Lịch sử đọc ghi lại tập đang đọc.
+- **Tiếp tục đọc / Danh sách chương / Lịch sử đọc với mục "Trên máy"**: trước đây báo "Nguồn truyện không còn khả dụng". Giờ "Đọc tiếp" mở lại đúng tập (KOReader nhớ trang), "Danh sách tập" mở danh sách file trong thư mục và đánh dấu tập "Đang đọc".
+- **Icon không hiển thị**: các emoji không có trong font của KOReader (📖📋📜💾🏠🔄🔍📚📦🔀🎨👤🤖🗑🚀🎉, ký tự U+FE0F) hiện thành ô vuông trong menu chính, cử chỉ, danh mục nguồn và thông báo. Thay bằng ký hiệu có sẵn trong font: ▶ ☰ ⟲ ⤓ ⌂ ↻ ⌕ ☷ ⧉ ⇅ ✎ ● ⚙ ✕ ⚡.
+
+### Tests
+- `spec/main_menu_test.lua`: cập nhật theo quy ước hiện tại — plugin cố ý không có `onShow`/`onOpen` (KOReader phát sự kiện Show/Open tới mọi module, sẽ mở lại trình duyệt đè lên chương vừa mở); ZenOS tìm thấy `show`.
+- `spec/font_helper_test.lua`: viết lại theo cách nạp font hiện tại (đường dẫn tuyệt đối trong thư mục plugin, đăng ký vào `FontList:getFontList()`, patch v2 có marker); kiểm cả trường hợp thiếu file font và font hỏng.
+
+## 3.15.1 (BUILD-1380) - 2026-10-22
+
+### Bug Fixes
+- **Tìm trên tất cả nguồn tự mở một truyện**: trong lúc tìm (chặn giao diện ~15s) cú chạm vào nút "Tìm" bị giữ lại, rồi rơi vào hàng kết quả nằm đúng chỗ đó khi danh sách hiện ra. Sau mọi thao tác chờ (`withLoading`), input tồn đọng giờ bị bỏ trong ~0,8s.
+- **Tủ truyện**: bỏ nút **Xóa** trên từng hàng vì che dòng "Đã tải X/N" của truyện đã hoàn thành. Xóa qua biểu tượng ✓ trên thanh tiêu đề (chọn một hay nhiều truyện) hoặc giữ truyện → "Xóa khỏi tủ truyện".
+
+## 3.15.0 (BUILD-1379) - 2026-10-22
+
+### Features & Improvements
+- **Xóa truyện khỏi Tủ truyện**:
+  - Mỗi hàng trong Tủ truyện có nút **Xóa**; giữ truyện → "Xóa khỏi tủ truyện" và nút trong danh sách chương dùng cùng hộp thoại.
+  - Hai lựa chọn: **Xóa khỏi Tủ truyện và cả file đã tải** (hiện số file) hoặc **Chỉ xóa khỏi Tủ truyện (giữ file)**. Lựa chọn 1 hỏi lại kèm danh sách đường dẫn trước khi xóa vĩnh viễn.
+  - "File của truyện" gồm thư mục plugin tải về, thư mục trên máy đã gắn (`offline_dir`), và file/thư mục của mục "Trên máy" kèm thư mục `.sdr`.
+  - Biểu tượng ✓ trên thanh tiêu đề mở chế độ chọn nhiều: ☐/☑ từng truyện, **Chọn tất cả / Bỏ chọn tất cả**, "Xóa N truyện đã chọn" (lưu Tủ truyện một lần).
+  - Không bao giờ xóa `/`, đường dẫn tương đối hoặc có `..`, thư mục gốc plugin, thư mục dữ liệu KOReader, thư viện sách, `home_dir`, `/sdcard` hay thư mục cha của chúng; mục bị bỏ qua được báo lại.
+  - Lịch sử đọc không bị đụng tới.
+
+## 3.14.0 (BUILD-1378) - 2026-10-22
+
+### Features & Improvements
+- **Thêm truyện trên máy vào Tủ truyện** (menu chính):
+  - Quét thư mục plugin tải về (`<koreader>/truyenviet/<nguồn>/<truyện>`, kể cả thư mục rỗng) và thư viện sách (setting `local_library_dirs`, `home_dir` của KOReader, mặc định `/sdcard/Books`).
+  - Thư mục plugin được ghép với URL online qua Tủ truyện, lịch sử, tìm kiếm trên nguồn, rồi so khớp bỏ hậu tố số (`darwin-jihen-21048` → `darwin-jihen`, không tạo mục trùng).
+  - Thư mục sách có file chương dạng `<slug>-chap-N` được **gắn** (`offline_dir`) vào truyện online sẵn có thay vì tạo mục mới; không di chuyển file nào.
+  - Thư mục/file còn lại thành mục **"Trên máy"** (source `local`, url là đường dẫn). Chạm để mở file hoặc danh sách tập; giữ để xóa khỏi Tủ truyện (giữ file), tìm lại bìa, mở trong trình quản lý file.
+  - Danh sách xác nhận ☑/☐ trước khi thêm; mục online không ghép được liệt kê riêng. Chạy lại không thêm trùng.
+- **Dòng phụ Tủ truyện**: `Đã tải X/N`, `Đã tải X chương`, `Chưa tải`, `Trên máy · N tập`; đếm cả chương trong thư mục đã gắn.
+- **Ảnh bìa lớn** (`truyenviet/cover_finder.lua`): WeebCentral 400x600 (truyện tranh, tên trùng hoàn toàn) → `og:image` trang truyện → bìa đang lưu → trang bìa trong file trên máy (PNG ≤600px). Mỗi ứng viên được tải và kiểm tra là ảnh thật. Lệnh mới "Tìm lại bìa lớn cho Tủ truyện"; mục cũ "Tải lại ảnh bìa" đổi thành "Tìm lại ảnh bìa lớn".
+- **Mở Tủ truyện tự làm mới** số chương (cũ hơn 12 giờ, tối đa 12 mục) và bìa còn thiếu (tối đa 4 mục, mỗi mục thử lại sau 12 giờ), hạn 15s; lưu lại `meta_time`/`cover_time`. Tắt tìm bìa tự động khi bật chế độ nhanh.
+
+### Bug Fixes
+- Xóa truyện khỏi Tủ truyện chỉ xóa bản tải trong thư mục plugin; thư mục trên máy đã gắn không bao giờ bị xóa.
+- `Storage:listFavorites` trả bản sao để trường hiển thị không lọt vào settings.
+
+## 3.13.0 (BUILD-1377) - 2026-10-22
+
+### Features & Improvements
+- **Chương mới nhất & trạng thái "Hoàn thành" cho mọi nguồn**:
+  - Dòng phụ của mỗi truyện trong kết quả tìm kiếm và danh sách duyệt nguồn hiển thị `Nguồn · Chương N · Hoàn thành` (N là số chương mới nhất site ghi, giữ phần thập phân như `Chương 12.5`). Nguồn chỉ biết tổng số chương thì hiện `Nguồn · N chương`.
+  - Nguồn tự gán `latest_chapter`/`chapter_count`/`completed` ngay từ trang tìm kiếm khi có sẵn; nguồn nào không có thì khai báo `Source:fetchSearchMeta(story)` (đúng 1 request rẻ nhất) và `SearchService:enrichMeta` tự bổ sung cho tối đa 12 truyện đầu còn thiếu chương mới nhất hoặc trạng thái (song song, 2 request/nguồn, hạn chót 8s, cache theo URL).
+  - generic_source: thêm khoá tuỳ chọn `search.latest_chapter_pattern`.
+- **Tìm kiếm nhanh hơn (chạy song song)**:
+  - Module mới `truyenviet/async_pool.lua`: chạy nhiều tác vụ trên Copas với giới hạn đồng thời và hạn chót, an toàn khi gọi lồng (không gọi `copas.step` trong thread của pool).
+  - `HttpClient:request` tự chuyển sang `requestAsync` khi chạy trong pool (timeout 10s, 1 lần thử lại, bỏ curl fallback); `requestAsync` hỗ trợ `max_retries`, `no_curl` và trả đủ headers/mã lỗi như bản đồng bộ.
+  - `SearchService:search` chạy tối đa 6 nguồn cùng lúc, hạn chót 15s/lượt; nguồn quá hạn báo `"<Nguồn>: quá thời gian (15s)"` mà không chặn kết quả nguồn khác. Thứ tự/điểm sắp xếp giữ nguyên. Thử lại tuần tự một lần cho nguồn lỗi TLS. Cache kết quả 10 phút (30 mục).
+  - Bổ sung số chương và tải bìa chạy song song (`CoverCache:prefetch` chuyển sang AsyncPool).
+  - Bỏ các vòng Copas riêng trong đường tìm kiếm của TruyenQQ (`fillCompletedStatus`) và ZetTruyen (`fillChapterCounts`).
+
+### Bug Fixes (nguồn)
+- akaytruyen: tham số tìm kiếm đúng là `key_word` (trước đây site bỏ qua từ khoá).
+- metruyenchuvn: tên miền mới `metruyenchu.com.vn`.
+- cbunu: tên miền mới `cucbongunu.com`, tìm kiếm `/tim-kiem.html?q=`, danh sách hoàn thành `/da-hoan`.
+- docln: tham số tìm kiếm `keywords`.
+- haccbl, dualeotruyenfull: tìm kiếm qua API JSON `/wp-json/initlise/v1/search` (loại bài spam).
+- metruyenvn: tìm kiếm qua `admin-ajax.php` (`action=searchtax`).
+- truyendich: tìm kiếm qua API `/api/novels/search` (trang HTML render phía client nên trước đây luôn rỗng); sửa nhãn `Trạng thái`.
+- truyendich: chuyển sang `truyendich.space` (`.ai`/`.fit` bị chặn TLS từ VN, làm mọi lượt tìm chờ hết 15s); URL yêu thích/lịch sử tên miền cũ tự đổi sang tên miền mới.
+- dualeo: tắt mặc định một lần (mọi tên miền đều hết hạn kết nối từ VN); bật lại trong cài đặt nguồn thì giữ nguyên.
+- conduongbachu: bỏ request `/?s=` thừa.
+- xtruyen: sửa nhãn `Trạng thái` trong chi tiết truyện.
+- generic_source: sửa thứ tự tham số `getChapterAsync`, sửa lỗi `story_block_pattern` nhiều capture; thêm khoá tuỳ chọn `search.item_marker`, `chapter_count_pattern`, `completed_pattern`.
+
 ## 3.12.0 (BUILD-1375) - 2026-10-08
 
 ### Features & Bug Fixes

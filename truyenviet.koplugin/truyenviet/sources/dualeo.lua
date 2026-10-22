@@ -90,11 +90,14 @@ function Source:parseSearch(html)
         if href and href:find("/truyen-tranh/", 1, true) and title and title ~= "" then
             local cover = Util.getAttribute(image_tag, "data-src")
                 or Util.getAttribute(image_tag, "src")
+            -- Thẻ truyện ghi chương mới nhất: <div class="chap_name">Chapter 170</div>
+            local latest = tonumber(item_html:match('chap_name">%s*[Cc]hapter%s+([%d%.]+)'))
             table.insert(stories, {
                 source_id = self.id,
                 title = Util.decodeHtml(title),
                 url = Util.absoluteUrl(self.base_url, href),
                 cover_url = Util.absoluteUrl(self.base_url, cover),
+                latest_chapter = latest and latest > 0 and latest or nil,
                 kind = self.kind,
             })
         end
@@ -113,6 +116,38 @@ function Source:search(query)
         return nil, err
     end
     return self:parseSearch(html)
+end
+
+-- Trạng thái ở trang chi tiết (site viết sai chính tả "Tình trang: Full").
+-- Trả true khi full/hoàn thành, false khi đang ra, nil nếu không nhận ra.
+function Source:parseCompleted(status)
+    if type(status) ~= "string" or status == "" then
+        return nil
+    end
+    local lowered = status:lower()
+    if lowered:find("full", 1, true)
+            or lowered:find("hoàn thành", 1, true)
+            or status:find("HOÀN THÀNH", 1, true) then
+        return true
+    end
+    if status:find("đang", 1, true)
+            or status:find("Đang", 1, true)
+            or status:find("ĐANG", 1, true) then
+        return false
+    end
+    return nil
+end
+
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, requestHeaders())
+    if not html then
+        return nil, err
+    end
+    local completed = self:parseCompleted(self:parseStoryDetails(html).status)
+    if completed == nil then
+        return nil, "Không đọc được trạng thái"
+    end
+    return { completed = completed }
 end
 
 function Source:parseListing(html, page)

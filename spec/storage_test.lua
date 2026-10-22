@@ -6,6 +6,7 @@ package.path = table.concat({
 }, ";")
 
 local fail_flush = false
+local flush_count = 0
 local settings = {
     data = {
         disabled_sources = {
@@ -31,6 +32,7 @@ function settings:flush()
     if fail_flush then
         error("simulated write failure")
     end
+    flush_count = flush_count + 1
     return self
 end
 
@@ -130,6 +132,21 @@ assertEqual(nil, failed, "Favorite write failure is contained")
 assertEqual(false, Storage:isFavorite(story), "Failed favorite write is rolled back")
 
 fail_flush = false
+
+-- dualeo tắt mặc định đúng một lần; bật lại thì không bị tắt lần nữa
+assertEqual(true, settings.data.default_disabled_applied.dualeo, "Records one-time default disable")
+assertEqual(true, Storage:setSourceEnabled("dualeo", true), "Re-enables default-disabled source")
+Storage.settings = nil
+Storage:initialize()
+assertEqual(true, Storage:isSourceEnabled("dualeo"), "User re-enable survives restart")
+assertEqual(false, Storage:isSourceEnabled("truyenqq"), "Other disabled source survives restart")
+settings.data.default_disabled_applied = nil
+settings.data.disabled_sources = {}
+Storage.settings = nil
+Storage:initialize()
+assertEqual(false, Storage:isSourceEnabled("dualeo"), "Fresh settings disable dualeo by default")
+assertEqual(true, settings.data.disabled_sources.dualeo, "Default disable is persisted")
+
 assertEqual(
     true,
     Storage:setCustomBaseUrl("truyenfull", " https://mirror.example/ "),
@@ -142,6 +159,37 @@ assertEqual(
 )
 assertEqual(true, Storage:setFastMode(true), "Saves fast mode")
 assertEqual(true, settings.data.fast_mode, "Persists fast mode")
+
+-- Cập nhật Tủ truyện không đổi gì thì không ghi lại settings.
+local unchanged = {
+    source_id = "truyenfull",
+    title = "Không đổi",
+    url = "https://example.test/same",
+    details = { author = "A", tags = { "x", "y" } },
+}
+assertEqual(true, Storage:addFavorite(unchanged), "Adds favorite for unchanged check")
+local flushes = flush_count
+assertEqual(true, Storage:updateFavorite({
+    source_id = "truyenfull",
+    title = "Không đổi",
+    url = "https://example.test/same",
+    details = { author = "A", tags = { "x", "y" } },
+}), "Unchanged update succeeds")
+assertEqual(flushes, flush_count, "Unchanged favorite skips flush")
+assertEqual(true, Storage:updateFavorite({
+    source_id = "truyenfull",
+    title = "Không đổi",
+    url = "https://example.test/same",
+}), "Update without details keeps old details")
+assertEqual(flushes, flush_count, "Kept fields alone do not trigger flush")
+assertEqual(true, Storage:updateFavorite({
+    source_id = "truyenfull",
+    title = "Đã đổi",
+    url = "https://example.test/same",
+    details = { author = "A", tags = { "x", "z" } },
+}), "Changed update succeeds")
+assertEqual(flushes + 1, flush_count, "Changed favorite flushes once")
+assertEqual("z", Storage:getFavorites()["truyenfull|https://example.test/same"].details.tags[2], "Nested change saved")
 
 settings.data.custom_url_truyenqq = 123
 assertEqual(nil, Storage:getCustomBaseUrl("truyenqq"), "Ignores invalid custom URL")

@@ -30,18 +30,123 @@ function GenericSource.create(schema)
         return self:getCoverHeaders()
     end
 
+    -- Tách HTML thành các block truyện.
+    -- * item_marker (chuỗi thường, không phải pattern): mỗi block chạy từ marker
+    --   tới marker kế tiếp.
+    -- * story_block_pattern: block là toàn bộ đoạn khớp. Riêng pattern có đúng
+    --   1 capture thì giữ hành vi cũ (block = nội dung capture); pattern có
+    --   nhiều capture trước đây chỉ bind capture đầu nên title luôn hỏng, nay
+    --   dùng cả đoạn khớp.
+    function source:collectStoryBlocks(html, s_conf)
+        local blocks = {}
+        local marker = s_conf.item_marker
+        if type(marker) == "string" and marker ~= "" then
+            local starts = {}
+            local position = 1
+            while true do
+                local found = html:find(marker, position, true)
+                if not found then
+                    break
+                end
+                table.insert(starts, found)
+                position = found + #marker
+            end
+            for index, start in ipairs(starts) do
+                local finish = starts[index + 1] and (starts[index + 1] - 1) or #html
+                table.insert(blocks, html:sub(start, finish))
+            end
+            return blocks
+        end
+
+        local pattern = s_conf.story_block_pattern
+        local position = 1
+        while true do
+            local match = { html:find(pattern, position) }
+            local first, last = match[1], match[2]
+            if not first then
+                break
+            end
+            if #match == 3 then
+                table.insert(blocks, match[3])
+            else
+                table.insert(blocks, html:sub(first, last))
+            end
+            position = last >= first and (last + 1) or (first + 1)
+        end
+        return blocks
+    end
+
+    -- Số chương từ chapter_count_pattern (tuỳ chọn); bỏ dấu '.'/',' phân cách
+    -- hàng nghìn ("1.234" -> 1234). Không khớp hoặc pattern lỗi -> nil.
+    function source:parseChapterCount(block, s_conf)
+        local pattern = s_conf.chapter_count_pattern
+        if not pattern then
+            return nil
+        end
+        local ok, raw = pcall(string.match, block, pattern)
+        if not ok or not raw then
+            return nil
+        end
+        local count = tonumber((tostring(raw):gsub("[%.,]", "")))
+        if count and count >= 1 then
+            return math.floor(count)
+        end
+        return nil
+    end
+
+    -- Chương mới nhất từ latest_chapter_pattern (tuỳ chọn), capture đầu = số.
+    -- Giữ phần thập phân ("12.5" -> 12.5); chỉ bỏ dấu phân cách hàng nghìn khi
+    -- đúng dạng nhóm 3 chữ số ("1.234" / "1,234" -> 1234). Không khớp, <= 0
+    -- hoặc pattern lỗi -> nil.
+    function source:parseLatestChapter(block, s_conf)
+        local pattern = s_conf.latest_chapter_pattern
+        if not pattern then
+            return nil
+        end
+        local ok, raw = pcall(string.match, block, pattern)
+        if not ok or not raw then
+            return nil
+        end
+        raw = tostring(raw)
+        local normalized
+        if raw:match("^%d%d?%d?[%.,]%d%d%d$") or raw:match("^%d%d?%d?[%.,]%d%d%d[%.,]%d%d%d$") then
+            normalized = raw:gsub("[%.,]", "")
+        else
+            normalized = raw:gsub(",", ".")
+        end
+        local number = tonumber(normalized)
+        if number and number > 0 then
+            return number
+        end
+        return nil
+    end
+
+    -- completed_pattern (tuỳ chọn): khớp = hoàn thành; có khai báo mà không
+    -- khớp = chưa hoàn thành; không khai báo hoặc pattern lỗi -> nil (không rõ).
+    function source:parseCompleted(block, s_conf)
+        local pattern = s_conf.completed_pattern
+        if not pattern then
+            return nil
+        end
+        local ok, found = pcall(string.find, block, pattern)
+        if not ok then
+            return nil
+        end
+        return found ~= nil
+    end
+
     function source:parseSearch(html)
         local stories = {}
         local s_conf = self.schema.search or {}
         local position = 1
 
         -- Phương án A: Quét theo block truyện
-        if s_conf.story_block_pattern then
-            for block in html:gmatch(s_conf.story_block_pattern) do
+        if s_conf.story_block_pattern or s_conf.item_marker then
+            for _, block in ipairs(self:collectStoryBlocks(html, s_conf)) do
                 local href = s_conf.url_pattern and block:match(s_conf.url_pattern)
                 local title = s_conf.title_pattern and block:match(s_conf.title_pattern)
                 local cover = s_conf.cover_pattern and (block:match(s_conf.cover_pattern) or block:match('src="([^"]+)"'))
-                
+
                 if href and title then
                     table.insert(stories, {
                         source_id = self.id,
@@ -49,6 +154,9 @@ function GenericSource.create(schema)
                         url = Util.absoluteUrl(self.base_url, href),
                         cover_url = cover and Util.absoluteUrl(self.base_url, cover) or nil,
                         kind = self.kind,
+                        chapter_count = self:parseChapterCount(block, s_conf),
+                        latest_chapter = self:parseLatestChapter(block, s_conf),
+                        completed = self:parseCompleted(block, s_conf),
                     })
                 end
             end
@@ -261,8 +369,8 @@ function GenericSource.create(schema)
             { id = "hot", name = "🔥 Truyện Hot / Đề Cử" },
             { id = "completed", name = "✅ Truyện Hoàn Thành (Full)" },
             { id = "updating", name = "🆕 Truyện Đang Ra / Cập Nhật Mới" },
-            { id = "genres", name = "📚 Tất Cả Thể Loại" },
-            { id = "search", name = "🔍 Tìm Kiếm Trên Nguồn Này" },
+            { id = "genres", name = "☷ Tất Cả Thể Loại" },
+            { id = "search", name = "⌕ Tìm Kiếm Trên Nguồn Này" },
         }
     end
 
@@ -572,7 +680,7 @@ function GenericSource.create(schema)
     end
 
     function source:getChapterAsync(chapter)
-        local html, err = Http:requestAsync("GET", chapter.url, self:getHeaders(), nil)
+        local html, err = Http:requestAsync("GET", chapter.url, nil, self:getHeaders())
         if not html then
             return nil, err
         end

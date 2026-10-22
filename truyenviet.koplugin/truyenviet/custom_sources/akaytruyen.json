@@ -11,11 +11,13 @@
     "path": "/"
   },
   "search": {
-    "path": "/tim-kiem/?tukhoa={query}",
-    "story_block_pattern": "<a[^>]+href=[\"'](https?://akaytruyen\\.com/truyen/[^\"']+)[\"'][^>]*>([%s%S]-)</a>",
-    "title_pattern": "title=[\"']([^\"']+)[\"']",
-    "url_pattern": "href=[\"']([^\"']+)[\"']",
-    "cover_pattern": "data%-src=[\"']([^\"']+)[\"']"
+    "path": "/tim-kiem?key_word={query}",
+    "item_marker": "<div class=\"story-item-list ",
+    "url_pattern": "href=\"(https?://akaytruyen%.com/truyen/[^\"]+)\"",
+    "title_pattern": "story%-name\">%s*([^<]-)%s*</a>",
+    "cover_pattern": "data%-src=[\"']([^\"']+)[\"']",
+    "chapter_count_pattern": "story%-item%-list__chapter[^>]*>%s*[^%d<]-(%d+)",
+    "completed_pattern": "text%-bg%-success[^>]*>%s*Full%s*<"
   },
   "story_details": {
     "description_pattern": "<div[^>]-class=[\"'][^\"']*desc[^\"']*[\"'][^>]*>([%s%S]-)</div>",

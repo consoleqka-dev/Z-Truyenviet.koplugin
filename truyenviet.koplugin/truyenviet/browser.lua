@@ -5,16 +5,22 @@ local InputDialog = require("ui/widget/inputdialog")
 local Menu = require("ui/widget/menu")
 local NetworkMgr = require("ui/network/manager")
 local Notification = require("ui/widget/notification")
-local Screen = require("device").screen
+local Device = require("device")
+local Screen = Device.screen
 local TextViewer = require("ui/widget/textviewer")
 local Trapper = require("ui/trapper")
 local UIManager = require("ui/uimanager")
 
+local AsyncPool = require("truyenviet/async_pool")
 local Builder = require("truyenviet/document_builder")
+local BackgroundFetch = require("truyenviet/background_fetch")
+local ChapterCache = require("truyenviet/chapter_cache")
 local ChapterOrder = require("truyenviet/chapter_order")
+local ChapterPosition = require("truyenviet/chapter_position")
 local ChapterDownloader = require("truyenviet/chapter_downloader")
 local CoverCache = require("truyenviet/cover_cache")
 local CredentialManager = require("truyenviet/credential_manager")
+local LocalLibrary = require("truyenviet/local_library")
 local Reader = require("truyenviet/reader")
 local SearchService = require("truyenviet/search_service")
 local SourceRegistry = require("truyenviet/source_registry")
@@ -23,6 +29,7 @@ local StoryResults = require("truyenviet/widgets/story_results")
 local Version = require("truyenviet/version")
 local Debug = require("truyenviet/debugger")
 local Util = require("truyenviet/helpers")
+local Windows = require("truyenviet/windows")
 
 local function autoOpenChapter(chapters, selection)
     if type(selection) == "table" then
@@ -43,6 +50,7 @@ function ListView:init()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
     Menu.init(self)
+    Windows.track(self)
 end
 
 function ListView:onLeftButtonTap()
@@ -61,6 +69,16 @@ function ListView:onClose()
         UIManager:nextTick(callback)
     end
     return true
+end
+
+-- UIManager:close() trực tiếp (closeAndRun, mở chương) không qua onClose;
+-- đánh dấu để kết quả làm mới nền không cập nhật view đã đóng.
+function ListView:onCloseWidget()
+    self._truyenviet_hidden = true
+    Windows.untrack(self)
+    if Menu.onCloseWidget then
+        return Menu.onCloseWidget(self)
+    end
 end
 
 function ListView:onMenuHold(item)
@@ -127,12 +145,61 @@ local function withLoading(message, callback)
     UIManager:forceRePaint()
 
     local ok, result, err = pcall(callback)
+    -- Thao tác dài chặn UI: cú chạm trong lúc chờ (vd. phần nhả của nút "Tìm")
+    -- nằm lại trong hàng đợi và sẽ rơi vào màn hình mới hiện ra sau đó.
+    -- Bỏ input một nhịp ngắn để không mở nhầm truyện trong danh sách kết quả.
+    if Device.input and Device.input.inhibitInputUntil then
+        Device.input:inhibitInputUntil(true)
+    end
     UIManager:close(loading)
 
     if not ok then
         return nil, tostring(result)
     end
     return result, err
+end
+
+-- Bổ sung số chương/trạng thái và tải bìa SONG SONG trong một lượt AsyncPool.
+-- CoverCache:prefetch tự bỏ qua khi bật fast_mode; enrich vẫn chạy vì chỉ tốn
+-- vài request nhỏ. Lỗi/quá hạn của một việc không ảnh hưởng việc còn lại.
+local function enrichAndPrefetch(stories)
+    local results = AsyncPool.run({
+        function()
+            SearchService:enrichMeta(stories, { registry = SourceRegistry })
+        end,
+        function()
+            CoverCache:prefetch(stories, SourceRegistry)
+        end,
+    }, { concurrency = 2, deadline = 12 })
+    for index, label in ipairs({ "bổ sung số chương", "tải bìa" }) do
+        local entry = results[index]
+        if entry and not entry.done then
+            Debug.write("[Browser] Quá hạn khi " .. label)
+        elseif entry and not entry.ok then
+            Debug.write("[Browser] Lỗi khi " .. label .. ": " .. tostring(entry.values))
+        end
+    end
+end
+
+local function isOnline()
+    if NetworkMgr and type(NetworkMgr.isWifiOn) == "function" then
+        return NetworkMgr:isWifiOn()
+    elseif NetworkMgr and type(NetworkMgr.isWIFIOn) == "function" then
+        return NetworkMgr:isWIFIOn()
+    elseif NetworkMgr and type(NetworkMgr.isOnline) == "function" then
+        return NetworkMgr:isOnline()
+    end
+    return true
+end
+
+-- Tủ truyện kèm số chương đã tải, loại mục và bìa trong cache.
+local function loadFavorites()
+    return LocalLibrary.annotate(Storage:listFavorites(), SourceRegistry)
+end
+
+local function isDirectory(path)
+    local lfs = require("libs/libkoreader-lfs")
+    return lfs.attributes(path, "mode") == "directory"
 end
 
 local function runOnline(callback)
@@ -152,47 +219,250 @@ local function showView(title, items, on_return_callback)
     return view
 end
 
-local function toggleFavorite(story, refresh_callback)
-    if Storage:isFavorite(story) then
-        local removed, remove_err = Storage:removeFavorite(story)
-        if not removed then
-            showError(remove_err)
-            return nil
+-- Thư mục không bao giờ bị xóa (kể cả thư mục cha của chúng).
+local function protectedDirs()
+    local DataStorage = require("datastorage")
+    local LibraryImport = require("truyenviet/library_import")
+    local dirs = { Storage:getRootDir(), DataStorage:getFullDataDir(),
+        "/sdcard", "/storage/emulated/0", "/mnt/onboard", "/mnt/us" }
+    for _, dir in ipairs(LibraryImport.libraryDirs()) do
+        table.insert(dirs, dir)
+    end
+    local home = rawget(_G, "G_reader_settings") and G_reader_settings:readSetting("home_dir")
+    if type(home) == "string" then
+        table.insert(dirs, home)
+    end
+    return dirs
+end
+
+-- with_size: thêm dung lượng sau mỗi đường dẫn.
+local function pathList(paths, limit, with_size)
+    limit = limit or 5
+    local lines = {}
+    for index, path in ipairs(paths) do
+        if index > limit then
+            table.insert(lines, string.format("… và %d mục khác", #paths - limit))
+            break
         end
-        local source = SourceRegistry:get(story.source_id)
-        if source then
-            local lfs = require("libs/libkoreader-lfs")
-            local dir = Storage:getStoryDir(source, story)
-            if lfs.attributes(dir, "mode") == "directory" then
-                UIManager:show(ConfirmBox:new{
+        local line = "• " .. path
+        if with_size then
+            line = line .. " (" .. LocalLibrary.formatSize(LocalLibrary.sizeOf({ path })) .. ")"
+        end
+        table.insert(lines, line)
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Tên file plugin đặt cho các chương trong mục lục đã lưu; nil nếu chưa lưu.
+local function savedChapterNames(story)
+    local source = SourceRegistry:get(story.source_id)
+    local chapters = source and ChapterCache.chaptersFor(story.source_id, story.url)
+    if not chapters then
+        return nil
+    end
+    local names = {}
+    for _, chapter in ipairs(chapters) do
+        if chapter.url then
+            table.insert(names, Storage.chapterFileName(source, chapter))
+        end
+    end
+    return names
+end
+
+-- Đích "chỉ xóa chương đã tải" của các truyện kèm số file và dung lượng.
+local function downloadPlan(stories, protected)
+    local plan = LocalLibrary.collectDownloadTargets(stories, protected, savedChapterNames)
+    plan.protected = protected
+    plan.file_count = LocalLibrary.countFiles(plan.targets)
+    plan.size_text = LocalLibrary.formatSize(LocalLibrary.sizeOf(plan.targets))
+    return plan
+end
+
+-- Hỏi lại rồi xóa chương đã tải của truyện online, giữ truyện trong Tủ
+-- truyện. on_done(result) chạy sau khi đã xóa.
+local function confirmRemoveDownloads(stories, on_done, plan)
+    plan = plan or downloadPlan(stories, protectedDirs())
+    if plan.file_count == 0 then
+        UIManager:show(InfoMessage:new{
             title = "Truyện Việt",
-            text = "Đã xóa khỏi tủ truyện.\nBạn có muốn xóa luôn các bản tải của truyện này khỏi máy không?",
-                    ok_text = "Xóa bản tải",
-                    ok_callback = function()
-                        for file in lfs.dir(dir) do
-                            if file ~= "." and file ~= ".." then
-                                os.remove(dir .. "/" .. file)
-                            end
-                        end
-                        os.remove(dir)
-                        UIManager:show(InfoMessage:new{
-            title = "Truyện Việt",
-            text = "Đã xóa các chương đã tải." })
-                    end,
-                    cancel_text = "Giữ lại",
-                })
-            else
-                UIManager:show(InfoMessage:new{
-            title = "Truyện Việt",
-            text = "Đã xóa khỏi tủ truyện." })
+            text = "Không có chương đã tải để xóa.",
+        })
+        return
+    end
+    local lines = {
+        string.format("Xóa %d file chương đã tải (%s) của %d truyện?", plan.file_count, plan.size_text, #plan.stories),
+        "Truyện vẫn ở Tủ truyện, lịch sử đọc giữ nguyên; có thể tải lại sau.",
+    }
+    for _, story in ipairs(plan.stories) do
+        if Storage:getLinkedDir(story) then
+            table.insert(lines, "File bạn tự chép vào thư mục gắn ngoài sẽ được giữ nguyên.")
+            break
+        end
+    end
+    UIManager:show(ConfirmBox:new{
+        title = "Truyện Việt",
+        text = table.concat(lines, "\n"),
+        ok_text = "Xóa chương",
+        cancel_text = "Hủy",
+        ok_callback = function()
+            local result, err = withLoading("Đang xóa chương đã tải…", function()
+                return LocalLibrary.removeDownloads(stories,
+                    { protected = plan.protected, names_for = savedChapterNames })
+            end)
+            if not result then
+                showError(err or "Không xóa được chương đã tải.")
+                return
+            end
+            local message = {
+                string.format("Đã xóa %d file (%s) của %d truyện.", result.deleted_files, plan.size_text, result.stories),
+            }
+            if result.skipped_local > 0 then
+                table.insert(message, string.format("Bỏ qua %d truyện trên máy.", result.skipped_local))
+            end
+            if #result.linked_kept > 0 then
+                table.insert(message, string.format(
+                    "%d truyện gắn thư mục ngoài chưa có mục lục lưu nên giữ nguyên file trong đó.",
+                    #result.linked_kept))
+            end
+            if #result.failed > 0 then
+                table.insert(message, string.format("Không xóa được %d mục:\n%s", #result.failed, pathList(result.failed)))
+            end
+            if #result.skipped > 0 then
+                table.insert(message, "Giữ nguyên thư mục được bảo vệ:\n" .. pathList(result.skipped))
+            end
+            UIManager:show(InfoMessage:new{
+                title = "Truyện Việt",
+                text = table.concat(message, "\n"),
+            })
+            if on_done then
+                on_done(result)
+            end
+        end,
+    })
+end
+
+-- Xóa truyện khỏi Tủ truyện với 2 lựa chọn: xóa cả file của truyện (thư mục
+-- plugin tải về, thư mục trên máy đã gắn, file/thư mục "Trên máy" kèm .sdr)
+-- hoặc chỉ xóa khỏi Tủ truyện. on_done(result) chạy sau khi đã xóa. Truyện
+-- online có chương đã tải còn có lựa chọn chỉ xóa chương, giữ trong Tủ
+-- truyện; xong thì gọi on_downloads_removed(result).
+local function confirmRemoveStories(stories, on_done, on_downloads_removed)
+    if #stories == 0 then
+        return
+    end
+    local protected = protectedDirs()
+    local download_plan = downloadPlan(stories, protected)
+    local targets, skipped = LocalLibrary.collectTargets(stories, protected)
+    local file_count = LocalLibrary.countFiles(targets)
+    local size_text = LocalLibrary.formatSize(LocalLibrary.sizeOf(targets))
+    local name = #stories == 1 and ("\"" .. tostring(stories[1].title) .. "\"")
+        or string.format("%d truyện", #stories)
+
+    local function finish(delete_files)
+        local result, err = withLoading(delete_files and "Đang xóa file..." or "Đang xóa khỏi Tủ truyện...", function()
+            return LocalLibrary.removeStories(stories, { delete_files = delete_files, protected = protected })
+        end)
+        if not result then
+            showError(err or "Không lưu được Tủ truyện.")
+            return
+        end
+        local lines = { string.format("Đã xóa %d truyện khỏi Tủ truyện.", result.removed) }
+        if delete_files then
+            table.insert(lines, string.format("Đã xóa %d file.", result.deleted_files))
+            if #result.failed > 0 then
+                table.insert(lines, string.format("Không xóa được %d mục:\n%s", #result.failed, pathList(result.failed)))
+            end
+            if #result.skipped > 0 then
+                table.insert(lines, "Giữ nguyên thư mục được bảo vệ:\n" .. pathList(result.skipped))
             end
         else
-            UIManager:show(InfoMessage:new{
-            title = "Truyện Việt",
-            text = "Đã xóa khỏi tủ truyện." })
+            table.insert(lines, "Các file trên máy được giữ nguyên.")
         end
-        if refresh_callback then refresh_callback(false) end
-        return false
+        UIManager:show(InfoMessage:new{
+            title = "Truyện Việt",
+            text = table.concat(lines, "\n"),
+        })
+        if on_done then
+            on_done(result)
+        end
+    end
+
+    local dialog
+    local buttons = {
+            {
+                {
+                    text = #targets > 0
+                        and string.format("Xóa khỏi Tủ truyện và cả file đã tải (%d file · %s)",
+                            file_count, size_text)
+                        or "Xóa cả file đã tải (không có file trên máy)",
+                    enabled = #targets > 0,
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            local text = string.format("Xóa vĩnh viễn %d file (%s) của %s trong:\n%s",
+                                file_count, size_text, name, pathList(targets, nil, true))
+                            if #skipped > 0 then
+                                text = text .. "\n\nGiữ nguyên (thư mục được bảo vệ):\n" .. pathList(skipped)
+                            end
+                            UIManager:show(ConfirmBox:new{
+                                title = "Truyện Việt",
+                                text = text .. "\n\nKhông thể hoàn tác.",
+                                ok_text = "Xóa vĩnh viễn",
+                                cancel_text = "Hủy",
+                                ok_callback = function()
+                                    finish(true)
+                                end,
+                            })
+                        end)
+                    end,
+                },
+            },
+            {
+                {
+                    text = "Chỉ xóa khỏi Tủ truyện (giữ file)",
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            finish(false)
+                        end)
+                    end,
+                },
+            },
+            {
+                {
+                    text = "Hủy",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+            },
+    }
+    if download_plan.file_count > 0 then
+        table.insert(buttons, 1, {
+            {
+                text = string.format("Chỉ xóa chương đã tải, giữ trong Tủ truyện (%d file · %s)",
+                    download_plan.file_count, download_plan.size_text),
+                callback = function()
+                    closeAndRun(dialog, function()
+                        confirmRemoveDownloads(stories, on_downloads_removed, download_plan)
+                    end)
+                end,
+            },
+        })
+    end
+    dialog = ButtonDialog:new{
+        title = "Xóa " .. name .. " khỏi Tủ truyện",
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+local function toggleFavorite(story, refresh_callback)
+    if Storage:isFavorite(story) then
+        confirmRemoveStories({ story }, function()
+            if refresh_callback then refresh_callback(false) end
+        end, function()
+            if refresh_callback then refresh_callback("downloads_removed") end
+        end)
+        return nil
     else
         local added, add_err = Storage:addFavorite(story)
         if not added then
@@ -349,18 +619,36 @@ function Browser:showStoryActions(story, source, refresh_callback)
     }
 
     if Storage:isFavorite(story) then
+        local download_plan = downloadPlan({ story }, protectedDirs())
+        if download_plan.file_count > 0 then
+            table.insert(buttons, 2, {
+                {
+                    text = string.format("Xóa chương đã tải… (%d file · %s)",
+                        download_plan.file_count, download_plan.size_text),
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            confirmRemoveDownloads({ story }, function()
+                                if refresh_callback then refresh_callback("downloads_removed") end
+                            end, download_plan)
+                        end)
+                    end,
+                },
+            })
+        end
         table.insert(buttons, 2, {
             {
-                text = "Tải lại ảnh bìa",
+                text = "Tìm lại ảnh bìa lớn",
                 callback = function()
                     closeAndRun(dialog, function()
                         if story.cover_path then
                             os.remove(story.cover_path)
                             story.cover_path = nil
                         end
-                        withLoading("Đang tải lại ảnh bìa...", function()
-                            local CoverCache = require("truyenviet/cover_cache")
-                            CoverCache:download(story, source)
+                        withLoading("Đang tìm ảnh bìa lớn...", function()
+                            LocalLibrary.findCovers({ story }, SourceRegistry, { deadline = 30 })
+                            if story.cover_found then
+                                Storage:addFavorite(story)
+                            end
                         end)
                         if refresh_callback then refresh_callback(true) end
                     end)
@@ -377,6 +665,21 @@ function Browser:showStoryActions(story, source, refresh_callback)
 end
 
 function Browser:showRoot()
+    -- Chỉ một phiên Truyện Việt: đang đọc chương của plugin thì đóng chương
+    -- (KOReader lưu vị trí đọc) rồi mới mở trang chủ, và đóng mọi cửa sổ cũ.
+    local ReaderUI = require("apps/reader/readerui")
+    if Reader.active and ReaderUI.instance then
+        Debug.write("Browser:showRoot closing the open chapter first")
+        Reader:returnToPlugin(function()
+            self:showRoot()
+        end)
+        return
+    end
+    local closed = Windows.closeAll()
+    if closed > 0 then
+        Debug.write("Browser:showRoot closed " .. closed .. " old window(s)")
+    end
+
     Storage:initialize()
     pcall(function() require("truyenviet/font_helper"):setupComicFont() end)
 
@@ -386,17 +689,18 @@ function Browser:showRoot()
     local history = Storage:getHistory()
     if #history > 0 then
         local latest = history[1]
+        -- Menu của KOReader không giới hạn độ rộng phần bên phải: tên chương
+        -- dài (tên file của mục "Trên máy") làm độ rộng còn lại âm và crash.
+        local chapter_title = latest.chapter.title
+        if chapter_title == latest.story.title then
+            chapter_title = nil
+        end
         table.insert(items, {
-            text = "📖 Tiếp tục: " .. latest.story.title,
-            mandatory = latest.chapter.title,
+            text = "▶ Tiếp tục: " .. latest.story.title,
+            mandatory = chapter_title and Util.shorten(chapter_title, 24) or nil,
             callback = function()
                 closeAndRun(view, function()
-                    local src = SourceRegistry:get(latest.story.source_id)
-                    if src then
-                        self:loadStoryPage(latest.story, src, 1, function()
-                            self:showRoot()
-                        end)
-                    else
+                    if not self:openHistoryItem(latest, function() self:showRoot() end) then
                         self:showHistory(function() self:showRoot() end)
                     end
                 end)
@@ -457,6 +761,26 @@ function Browser:showRoot()
             end,
         })
         table.insert(items, {
+            text = "Thêm truyện trên máy vào Tủ truyện",
+            callback = function()
+                closeAndRun(view, function()
+                    self:showLibraryImport(function()
+                        self:showRoot()
+                    end)
+                end)
+            end,
+        })
+        table.insert(items, {
+            text = "Tìm lại bìa lớn cho Tủ truyện",
+            callback = function()
+                closeAndRun(view, function()
+                    self:findFavoriteCovers(function()
+                        self:showRoot()
+                    end)
+                end)
+            end,
+        })
+        table.insert(items, {
             text = "🌐 Dán URL Web Truyện để Tự Tạo Nguồn",
             callback = function()
                 closeAndRun(view, function()
@@ -467,7 +791,7 @@ function Browser:showRoot()
             end,
         })
         table.insert(items, {
-            text = "☁️ Tải Ebook từ Google Drive",
+            text = "☁ Tải Ebook từ Google Drive",
             callback = function()
                 closeAndRun(view, function()
                     self:showGDriveDownloadDialog(function()
@@ -477,7 +801,7 @@ function Browser:showRoot()
             end,
         })
         table.insert(items, {
-            text = "📦 Quản lý File Đã Tải & Gộp File",
+            text = "⧉ Quản lý File Đã Tải & Gộp File",
             callback = function()
                 closeAndRun(view, function()
                     self:showDownloadedManager(function()
@@ -487,7 +811,7 @@ function Browser:showRoot()
             end,
         })
         table.insert(items, {
-            text = "⚙️ Cài đặt Tải ngầm & Purge",
+            text = "⚙ Cài đặt Tải ngầm & Purge",
             callback = function()
                 closeAndRun(view, function()
                     self:showAdvancedSettings(function()
@@ -590,7 +914,7 @@ function Browser:showRoot()
             end,
         })
     table.insert(items, {
-        text = "🔄 Kiểm tra cập nhật OTA",
+        text = "↻ Kiểm tra cập nhật OTA",
         callback = function()
             closeAndRun(view, function()
                 local Updater = require("truyenviet/updater")
@@ -627,7 +951,7 @@ function Browser:showRoot()
             end,
         })
     table.insert(items, {
-        text = "🎨 Cấu hình Font Be Vietnam Pro Toàn Hệ Thống",
+        text = "✎ Cấu hình Font Be Vietnam Pro Toàn Hệ Thống",
         callback = function()
             local FontHelper = require("truyenviet/font_helper")
             local installed = FontHelper:isUserPatchInstalled()
@@ -722,7 +1046,7 @@ function Browser:showSourceSectionsMenu(source, on_return_callback)
             end,
         },
         {
-            text = "📚 Tất Cả Thể Loại",
+            text = "☷ Tất Cả Thể Loại",
             callback = function()
                 closeAndRun(view, function()
                     runOnline(function()
@@ -748,7 +1072,7 @@ function Browser:showSourceSectionsMenu(source, on_return_callback)
             end,
         },
         {
-            text = "🔍 Tìm Kiếm Trên " .. source.name,
+            text = "⌕ Tìm Kiếm Trên " .. source.name,
             callback = function()
                 closeAndRun(view, function()
                     self:showSearchDialog(source, function()
@@ -854,10 +1178,10 @@ function Browser:search(source, query, on_return_callback, parent_view)
         end
 
         local search_result, err = withLoading(
-            'Đang tìm và tải bìa cho "' .. query .. '"...',
+            'Đang tìm "' .. query .. '"...',
             function()
                 local stories, errors = SearchService:search(query, sources)
-                CoverCache:prefetch(stories, SourceRegistry)
+                enrichAndPrefetch(stories)
                 return {
                     stories = stories,
                     errors = errors,
@@ -995,7 +1319,7 @@ function Browser:browseSource(source, genre, local_page, on_return_callback)
             end
         end
 
-        CoverCache:prefetch(chunked_stories, SourceRegistry)
+        enrichAndPrefetch(chunked_stories)
 
         local local_total_pages = result.total_pages * cpp
 
@@ -1134,7 +1458,7 @@ function Browser:showSmartFilterDialog(stories, current_title, on_return_callbac
             },
             {
                 {
-                    text = "🔀 Sắp xếp tên A -> Z",
+                    text = "⇅ Sắp xếp tên A -> Z",
                     callback = function()
                         UIManager:close(dialog)
                         local sorted = {}
@@ -1151,7 +1475,7 @@ function Browser:showSmartFilterDialog(stories, current_title, on_return_callbac
                     end,
                 },
                 {
-                    text = "🔀 Sắp xếp tên Z -> A",
+                    text = "⇅ Sắp xếp tên Z -> A",
                     callback = function()
                         UIManager:close(dialog)
                         local sorted = {}
@@ -1199,10 +1523,33 @@ function Browser:showStories(title, stories, on_return_callback, options)
     end
 
     local view
+    -- Tùy chọn của lần mở lại: đứng ở trang chứa truyện vừa mở.
+    local function focusOn(story)
+        local next_options = {}
+        for key, value in pairs(options) do
+            next_options[key] = value
+        end
+        next_options.focus_story = story
+        return next_options
+    end
+    -- Mở lại danh sách này (Tủ truyện thì đọc lại để có số liệu mới).
+    local function reopen(focus_story)
+        if options.favorites_only then
+            self:showFavorites(on_return_callback, focus_story)
+        else
+            self:showStories(title, stories, on_return_callback, focusOn(focus_story))
+        end
+    end
     for _, story in ipairs(stories) do
         local source = SourceRegistry:get(story.source_id)
         if source then
             story.source_name = source.name
+        elseif LocalLibrary.isLocal(story) then
+            -- Mục "Trên máy" không có trong SourceRegistry; bìa trích từ file
+            -- vẫn nằm trong CoverCache (vd. Lịch sử đọc).
+            story.source_name = LocalLibrary.source_name
+        end
+        if source or LocalLibrary.isLocal(story) then
             story.cover_path = story.cover_path or CoverCache:get(story)
         end
     end
@@ -1237,9 +1584,16 @@ function Browser:showStories(title, stories, on_return_callback, options)
         end or nil,
         right_icon = options.right_icon,
         right_icon_tap_callback = options.right_icon_tap_callback,
+        focus_story = options.focus_story,
         story_callback = function(story)
             if options.on_story_tap then
                 options.on_story_tap(story, view)
+                return
+            end
+            if LocalLibrary.isLocal(story) then
+                self:openLocalEntry(story, view, function()
+                    reopen(story)
+                end)
                 return
             end
             local source = SourceRegistry:get(story.source_id)
@@ -1250,7 +1604,7 @@ function Browser:showStories(title, stories, on_return_callback, options)
             closeAndRun(view, function()
                 self:loadStoryPage(story, source, 1, function()
                     if options.favorites_only then
-                        local favorites = Storage:listFavorites()
+                        local favorites = loadFavorites()
                         if #favorites == 0 then
                             on_return_callback()
                         else
@@ -1258,11 +1612,11 @@ function Browser:showStories(title, stories, on_return_callback, options)
                                 title,
                                 favorites,
                                 on_return_callback,
-                                options
+                                focusOn(story)
                             )
                         end
                     else
-                        self:showStories(title, stories, on_return_callback, options)
+                        self:showStories(title, stories, on_return_callback, focusOn(story))
                     end
                 end)
             end)
@@ -1272,13 +1626,26 @@ function Browser:showStories(title, stories, on_return_callback, options)
                 options.on_story_hold(story, view)
                 return
             end
+            if LocalLibrary.isLocal(story) then
+                self:showLocalEntryActions(story, view, function()
+                    reopen(story)
+                end)
+                return
+            end
             local source = SourceRegistry:get(story.source_id)
             if not source then
                 showError("Nguồn truyện không còn khả dụng.")
                 return
             end
             self:showStoryActions(story, source, function(is_favorite)
-                if options.favorites_only and not is_favorite then
+                if is_favorite == "downloads_removed" then
+                    -- Đọc lại dung lượng và số chương đã tải.
+                    if options.favorites_only then
+                        closeAndRun(view, function()
+                            reopen(story)
+                        end)
+                    end
+                elseif options.favorites_only and not is_favorite then
                     view:removeStory(story)
                 else
                     view:refreshFavorites()
@@ -1289,20 +1656,430 @@ function Browser:showStories(title, stories, on_return_callback, options)
     UIManager:show(view)
 end
 
-function Browser:showFavorites(on_return_callback)
-    local favorites = Storage:listFavorites()
-    
+function Browser:showFavorites(on_return_callback, focus_story)
+    local favorites = loadFavorites()
+    -- Làm mới số chương (cũ hơn 12 giờ) và bìa còn thiếu khi có mạng.
+    if isOnline() then
+        local now = os.time()
+        local needed = false
+        for _, story in ipairs(favorites) do
+            if LocalLibrary.metaStale(story, now, SourceRegistry) or LocalLibrary.coverMissing(story, now) then
+                needed = true
+                break
+            end
+        end
+        if needed then
+            local updated = withLoading("Đang cập nhật Tủ truyện...", function()
+                return LocalLibrary.refresh(favorites, SourceRegistry)
+            end)
+            if updated and updated > 0 then
+                favorites = loadFavorites()
+            end
+        end
+    end
+
     self:showStories(
         "Tủ truyện",
         favorites,
         on_return_callback,
         {
             favorites_only = true,
+            focus_story = focus_story,
+            -- Chế độ chọn nhiều truyện để xóa.
+            right_icon = "check",
+            right_icon_tap_callback = function(view)
+                closeAndRun(view, function()
+                    self:selectFavoritesToRemove(on_return_callback)
+                end)
+            end,
         }
     )
 end
 
-function Browser:showHistory(on_return_callback)
+-- Chọn nhiều truyện (có "Chọn tất cả") rồi xóa khỏi Tủ truyện.
+function Browser:selectFavoritesToRemove(on_return_callback)
+    local favorites = loadFavorites()
+    local selected = {}
+    local view
+    local delete_item, all_item = {}, {}
+    local menu_items = { delete_item, all_item }
+
+    local function countSelected()
+        local count = 0
+        for _, story in ipairs(favorites) do
+            if selected[story] then
+                count = count + 1
+            end
+        end
+        return count
+    end
+    local function setTexts()
+        local count = countSelected()
+        local bytes = 0
+        for _, story in ipairs(favorites) do
+            if selected[story] then
+                bytes = bytes + (tonumber(story.size_bytes) or 0)
+            end
+        end
+        delete_item.text = string.format("Xóa %d truyện đã chọn", count)
+        delete_item.mandatory = bytes > 0 and LocalLibrary.formatSize(bytes) or nil
+        all_item.text = count == #favorites and "Bỏ chọn tất cả" or "Chọn tất cả"
+        for _, menu_item in ipairs(menu_items) do
+            local story = menu_item.story
+            if story then
+                menu_item.text = string.format("%s [%s] %s", selected[story] and "☑" or "☐",
+                    tostring(story.source_name or story.source_id), tostring(story.title))
+                local size = tonumber(story.size_bytes) or 0
+                menu_item.mandatory = size > 0 and LocalLibrary.formatSize(size) or nil
+            end
+        end
+    end
+    local function refresh()
+        setTexts()
+        view:updateItems()
+    end
+
+    delete_item.callback = function()
+        local chosen = {}
+        for _, story in ipairs(favorites) do
+            if selected[story] then
+                table.insert(chosen, story)
+            end
+        end
+        -- Xóa xong thì quay về Tủ truyện (đọc lại danh sách).
+        confirmRemoveStories(chosen, function()
+            view:onClose()
+        end, function()
+            view:onClose()
+        end)
+    end
+    all_item.callback = function()
+        local select_all = countSelected() < #favorites
+        for _, story in ipairs(favorites) do
+            selected[story] = select_all or nil
+        end
+        refresh()
+    end
+    for _, story in ipairs(favorites) do
+        local menu_item = { story = story }
+        menu_item.callback = function()
+            selected[story] = not selected[story] or nil
+            refresh()
+        end
+        table.insert(menu_items, menu_item)
+    end
+    setTexts()
+    view = showView("Chọn truyện để xóa", menu_items, function()
+        self:showFavorites(on_return_callback)
+    end)
+end
+
+-- Mục "Trên máy": file thì mở luôn, thư mục thì liệt kê các tập,
+-- không còn trên máy thì hỏi có xóa khỏi Tủ truyện không.
+function Browser:openLocalEntry(story, view, reopen)
+    local kind = LocalLibrary.entryType(story.url)
+    if not kind then
+        UIManager:show(ConfirmBox:new{
+            title = "Truyện Việt",
+            text = "Không còn tìm thấy trên máy:\n" .. story.url
+                .. "\n\nXóa mục này khỏi Tủ truyện?",
+            ok_text = "Xóa khỏi Tủ truyện",
+            ok_callback = function()
+                if Storage:removeFavorite(story) and view and view.removeStory then
+                    view:removeStory(story)
+                end
+            end,
+        })
+        return
+    end
+    if kind ~= "dir" then
+        closeAndRun(view, function()
+            self:openEbookFile(story.url)
+        end)
+        return
+    end
+    local books = LocalLibrary.listBooks(story.url)
+    if #books == 0 then
+        UIManager:show(InfoMessage:new{
+            title = "Truyện Việt",
+            text = "Thư mục chưa có file sách nào:\n" .. story.url,
+        })
+        return
+    end
+    -- Đánh dấu tập đọc gần nhất (Lịch sử đọc ghi lại khi mở file).
+    local last_read
+    for _, item in ipairs(Storage:getHistory()) do
+        if item.story.source_id == story.source_id and item.story.url == story.url then
+            last_read = item.chapter.url
+            break
+        end
+    end
+    local list_view
+    local items = {}
+    for _, path in ipairs(books) do
+        table.insert(items, {
+            text = path:sub(#story.url + 2),
+            mandatory = path == last_read and "Đang đọc" or nil,
+            callback = function()
+                closeAndRun(list_view, function()
+                    self:openFolderBook(books, path)
+                end)
+            end,
+        })
+    end
+    closeAndRun(view, function()
+        list_view = showView(story.title, items, reopen)
+    end)
+end
+
+-- Mở một file trong thư mục "Trên máy", kèm "Tập X/Y" trên thanh trạng thái.
+function Browser:openFolderBook(books, path)
+    Reader:setPosition(path, ChapterPosition.format(ChapterPosition.fromFolder(books, path)))
+    self:openEbookFile(path)
+end
+
+function Browser:showLocalEntryActions(story, view, reopen)
+    local dialog
+    local folder = LocalLibrary.entryType(story.url) == "dir" and story.url
+        or story.url:match("^(.*)/[^/]+$")
+    dialog = ButtonDialog:new{
+        title = story.title,
+        buttons = {
+            {
+                {
+                    text = "Xóa khỏi Tủ truyện…",
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            confirmRemoveStories({ story }, function()
+                                view:removeStory(story)
+                                if #view.stories == 0 then
+                                    view:onClose()
+                                end
+                            end)
+                        end)
+                    end,
+                },
+            },
+            {
+                {
+                    text = "Tìm lại ảnh bìa lớn",
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            story.cover_path = nil
+                            withLoading("Đang tìm ảnh bìa lớn...", function()
+                                LocalLibrary.findCovers({ story }, SourceRegistry, { deadline = 30 })
+                                if story.cover_found then
+                                    Storage:addFavorite(story)
+                                end
+                            end)
+                            closeAndRun(view, reopen)
+                        end)
+                    end,
+                },
+            },
+            {
+                {
+                    text = "Mở thư mục trong trình quản lý file",
+                    enabled = folder ~= nil and isDirectory(folder),
+                    callback = function()
+                        closeAndRun(dialog, function()
+                            local FileManager = require("apps/filemanager/filemanager")
+                            local ReaderUI = require("apps/reader/readerui")
+                            if ReaderUI.instance then
+                                ReaderUI.instance:onClose()
+                            end
+                            FileManager:showFiles(folder)
+                        end)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+-- Tìm bìa lớn cho mọi mục Tủ truyện chưa có bìa tìm được.
+function Browser:findFavoriteCovers(on_return_callback)
+    if not isOnline() then
+        showError("Cần kết nối mạng để tìm ảnh bìa.", on_return_callback)
+        return
+    end
+    local favorites = loadFavorites()
+    local pending = {}
+    for _, story in ipairs(favorites) do
+        if not story.cover_found then
+            table.insert(pending, story)
+        end
+    end
+    if #pending == 0 then
+        UIManager:show(InfoMessage:new{
+            title = "Truyện Việt",
+            text = "Mọi truyện trong Tủ truyện đã có ảnh bìa lớn.",
+        })
+        if on_return_callback then
+            UIManager:nextTick(on_return_callback)
+        end
+        return
+    end
+    local found = 0
+    withLoading(string.format("Đang tìm ảnh bìa cho %d truyện...", #pending), function()
+        local tried = LocalLibrary.findCovers(pending, SourceRegistry)
+        for _, story in ipairs(tried) do
+            if story.cover_found then
+                found = found + 1
+            end
+        end
+        Storage:mergeFavorites(tried)
+    end)
+    UIManager:show(InfoMessage:new{
+        title = "Truyện Việt",
+        text = string.format("Đã tìm được ảnh bìa cho %d/%d truyện.", found, #pending),
+    })
+    self:showFavorites(on_return_callback)
+end
+
+-- Quét truyện plugin đã tải và thư viện sách, cho người dùng bỏ chọn rồi thêm
+-- vào Tủ truyện; sau đó tìm bìa lớn và số chương cho các mục mới.
+function Browser:showLibraryImport(on_return_callback)
+    local LibraryImport = require("truyenviet/library_import")
+    local online = isOnline()
+    local result, err = withLoading("Đang quét truyện trên máy...", function()
+        return LibraryImport.collect({
+            registry = SourceRegistry,
+            favorites = Storage:listFavorites(),
+            history = Storage:getHistory(),
+            plugin_root = Storage:getRootDir(),
+            library_dirs = LibraryImport.libraryDirs(),
+            search = online,
+        })
+    end)
+    if not result then
+        showError(err or "Không quét được truyện trên máy.", on_return_callback)
+        return
+    end
+    if #result.items == 0 and #result.missing == 0 then
+        UIManager:show(InfoMessage:new{
+            title = "Truyện Việt",
+            text = "Không có truyện mới để thêm. Mọi truyện trên máy đã có trong Tủ truyện.",
+        })
+        if on_return_callback then
+            UIManager:nextTick(on_return_callback)
+        end
+        return
+    end
+
+    local view
+    local menu_items = {}
+    local add_item = {}
+    local function countSelected()
+        local count = 0
+        for _, item in ipairs(result.items) do
+            if item.selected then
+                count = count + 1
+            end
+        end
+        return count
+    end
+    local function itemText(item)
+        return string.format("%s %s (%s)", item.selected and "☑" or "☐", item.label, item.note)
+    end
+    local function setTexts()
+        add_item.text = string.format("➕ Thêm %d truyện đã chọn", countSelected())
+        for _, menu_item in ipairs(menu_items) do
+            if menu_item.import_item then
+                menu_item.text = itemText(menu_item.import_item)
+            end
+        end
+    end
+
+    add_item.callback = function()
+        if countSelected() == 0 then
+            return
+        end
+        local records, apply_err
+        closeAndRun(view, function()
+            records, apply_err = LibraryImport.apply(result.items)
+            if not records then
+                showError(apply_err or "Không lưu được Tủ truyện.", on_return_callback)
+                return
+            end
+            if online then
+                withLoading(string.format("Đang tìm bìa và số chương cho %d truyện...", #records), function()
+                    LocalLibrary.refresh(records, SourceRegistry, {
+                        covers = records,
+                        cover_limit = #records,
+                        meta_limit = #records,
+                        deadline = LocalLibrary.full_deadline,
+                    })
+                end)
+            end
+            UIManager:show(InfoMessage:new{
+                title = "Truyện Việt",
+                text = string.format("Đã thêm %d truyện vào Tủ truyện.", #records)
+                    .. (online and "" or "\nBật mạng rồi mở Tủ truyện để tải bìa và số chương."),
+            })
+            self:showFavorites(on_return_callback)
+        end)
+    end
+    table.insert(menu_items, add_item)
+    for _, item in ipairs(result.items) do
+        local menu_item = { import_item = item }
+        menu_item.callback = function()
+            item.selected = not item.selected
+            setTexts()
+            view:updateItems()
+        end
+        table.insert(menu_items, menu_item)
+    end
+    if #result.missing > 0 then
+        table.insert(menu_items, {
+            text = string.format("— Không tìm thấy truyện online (%d) —", #result.missing),
+        })
+        for _, entry in ipairs(result.missing) do
+            table.insert(menu_items, {
+                text = "    " .. entry.label,
+                callback = function()
+                    UIManager:show(InfoMessage:new{
+                        title = "Truyện Việt",
+                        text = "Không ghép được với truyện online nào nên không thêm:\n" .. entry.path,
+                    })
+                end,
+            })
+        end
+    end
+    setTexts()
+    view = showView("Thêm truyện trên máy vào Tủ truyện", menu_items, on_return_callback)
+end
+
+-- Mở một mục Lịch sử đọc: mục "Trên máy" mở lại file đã đọc (KOReader tự
+-- về trang cũ), truyện online vào trang truyện. Trả về false nếu không mở được.
+function Browser:openHistoryItem(item, on_return_callback)
+    local story = item.story
+    if LocalLibrary.isLocal(story) then
+        local kind = LocalLibrary.entryType(item.chapter.url)
+        if kind and kind ~= "dir" then
+            if LocalLibrary.entryType(story.url) == "dir" then
+                self:openFolderBook(LocalLibrary.listBooks(story.url), item.chapter.url)
+            else
+                self:openEbookFile(item.chapter.url)
+            end
+            return true
+        end
+        if LocalLibrary.entryType(story.url) then
+            self:openLocalEntry(story, nil, on_return_callback)
+            return true
+        end
+        return false
+    end
+    local source = SourceRegistry:get(story.source_id)
+    if not source then
+        return false
+    end
+    self:loadStoryPage(story, source, 1, on_return_callback)
+    return true
+end
+
+function Browser:showHistory(on_return_callback, focus_story)
     local history = Storage:getHistory()
     if #history == 0 then
         local ConfirmBox = require("ui/widget/confirmbox")
@@ -1326,6 +2103,7 @@ function Browser:showHistory(on_return_callback)
         table.insert(stories, item.story)
         history_by_url[item.story.source_id .. "|" .. item.story.url] = item
     end
+    LocalLibrary.copyFavoriteCovers(stories, Storage:listFavorites())
 
     self:showStories(
         "Lịch sử đọc",
@@ -1333,15 +2111,43 @@ function Browser:showHistory(on_return_callback)
         on_return_callback,
         {
             -- No right icon
+            focus_story = focus_story,
             on_story_tap = function(story, view)
+                local item = history_by_url[
+                    story.source_id .. "|" .. story.url
+                ]
+                local function reopen()
+                    self:showHistory(on_return_callback, story)
+                end
+                if LocalLibrary.isLocal(story) then
+                    local kind = LocalLibrary.entryType(story.url)
+                    if not kind then
+                        showError("Không còn tìm thấy trên máy:\n" .. story.url)
+                        return
+                    end
+                    UIManager:show(ConfirmBox:new{
+                        title = "Truyện Việt",
+                        text = "Đọc tiếp: " .. item.chapter.title .. "?",
+                        ok_text = "Đọc tiếp",
+                        cancel_text = kind == "dir" and "Danh sách tập" or "Hủy",
+                        ok_callback = function()
+                            closeAndRun(view, function()
+                                if not self:openHistoryItem(item, reopen) then
+                                    reopen()
+                                end
+                            end)
+                        end,
+                        cancel_callback = kind == "dir" and function()
+                            self:openLocalEntry(story, view, reopen)
+                        end or nil,
+                    })
+                    return
+                end
                 local source = SourceRegistry:get(story.source_id)
                 if not source then
                     showError("Nguồn truyện không còn khả dụng.")
                     return
                 end
-                local item = history_by_url[
-                    story.source_id .. "|" .. story.url
-                ]
                 UIManager:show(ConfirmBox:new{
             title = "Truyện Việt",
             text = "Đọc tiếp: " .. item.chapter.title .. "?",
@@ -1350,14 +2156,14 @@ function Browser:showHistory(on_return_callback)
                     ok_callback = function()
                         closeAndRun(view, function()
                             self:loadStoryPage(story, source, 1, function()
-                                self:showHistory(on_return_callback)
+                                self:showHistory(on_return_callback, story)
                             end, item.chapter)
                         end)
                     end,
                     cancel_callback = function()
                         closeAndRun(view, function()
                             self:loadStoryPage(story, source, 1, function()
-                                self:showHistory(on_return_callback)
+                                self:showHistory(on_return_callback, story)
                             end)
                         end)
                     end,
@@ -1385,7 +2191,7 @@ function Browser:showSourceManager(on_return_callback)
     local view
     local items = {
         {
-            text = "⚙️ TÙY CHỌN BẬT / TẮT / RESET HÀNG LOẠT",
+            text = "⚙ TÙY CHỌN BẬT / TẮT / RESET HÀNG LOẠT",
             mandatory_func = function() return "Công cụ" end,
             callback = function()
                 closeAndRun(view, function()
@@ -1405,7 +2211,7 @@ function Browser:showSourceManager(on_return_callback)
                                     end,
                                 },
                                 {
-                                    text = "⏸️ Tắt tất cả các nguồn",
+                                    text = "⏸ Tắt tất cả các nguồn",
                                     callback = function()
                                         SourceRegistry:disableAll()
                                         UIManager:close(bulk_dialog)
@@ -1415,7 +2221,7 @@ function Browser:showSourceManager(on_return_callback)
                             },
                             {
                                 {
-                                    text = "🔄 Đặt lại tất cả Domain mặc định",
+                                    text = "↻ Đặt lại tất cả Domain mặc định",
                                     callback = function()
                                         SourceRegistry:resetAllDomains()
                                         UIManager:close(bulk_dialog)
@@ -1498,7 +2304,7 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
     local action_buttons = {
         {
             {
-                text = is_enabled and "⏸️ Tắt Nguồn này" or "▶️ Bật Nguồn này",
+                text = is_enabled and "⏸ Tắt Nguồn này" or "▶ Bật Nguồn này",
                 is_default = true,
                 callback = function()
                     SourceRegistry:setEnabled(source.id, not is_enabled)
@@ -1510,7 +2316,7 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
         },
         {
             {
-                text = "ℹ️ Xem Thông tin chi tiết Nguồn",
+                text = "ℹ Xem Thông tin chi tiết Nguồn",
                 callback = function()
                     local info_text = SourceRegistry:getSourceInfo(source.id)
                     UIManager:show(TextViewer:new{
@@ -1575,7 +2381,7 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
         },
         {
             {
-                text = "⬆️ Đẩy lên trên",
+                text = "⬆ Đẩy lên trên",
                 callback = function()
                     SourceRegistry:moveUp(source.id)
                     closeAndRun(dlg, function()
@@ -1593,7 +2399,7 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
                 end,
             },
             {
-                text = "⬇️ Đẩy xuống dưới",
+                text = "⬇ Đẩy xuống dưới",
                 callback = function()
                     SourceRegistry:moveDown(source.id)
                     closeAndRun(dlg, function()
@@ -1608,8 +2414,8 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
         table.insert(action_buttons, 3, {
             {
                 text = CredentialManager:hasCredential(source.id)
-                    and "👤 Tài khoản (Đã lưu)"
-                    or "👤 Đăng nhập tài khoản",
+                    and "● Tài khoản (Đã lưu)"
+                    or "● Đăng nhập tài khoản",
                 callback = function()
                     closeAndRun(dlg, function()
                         self:showSourceAccountMenu(source, function()
@@ -1628,7 +2434,7 @@ function Browser:showSourceActionDialog(source, on_return_callback, parent_view)
     if is_custom then
         table.insert(action_buttons, {
             {
-                text = "🗑️ Xóa Nguồn Tùy chỉnh này",
+                text = "✕ Xóa Nguồn Tùy chỉnh này",
                 callback = function()
                     closeAndRun(dlg, function()
                         UIManager:show(ConfirmBox:new{
@@ -1677,34 +2483,48 @@ end
 function Browser:getLocalChapters(story, source)
     local lfs = require("libs/libkoreader-lfs")
     local Storage = require("truyenviet/storage")
-    local dir = Storage:getStoryDir(source, story)
+    local Util = require("truyenviet/helpers")
     local chapters = {}
+    local seen = {}
     local extension = source.kind == "comic" and ".cbz" or ".html"
-    
-    local ok = pcall(function()
-        for file in lfs.dir(dir) do
-            if file:sub(-#extension) == extension then
-                local basename = file:sub(1, -(#extension + 1))
-                table.insert(chapters, {
-                    title = basename,
-                    url = "local/" .. basename,
-                    is_local = true,
-                })
+
+    -- Thư mục gắn ngoài (file của người dùng) trước, rồi thư mục plugin tải về;
+    -- trùng số chương thì chỉ giữ một mục.
+    local linked = Storage:getLinkedDir(story)
+    local dirs = { Storage:getDownloadDir(source.id, story.url) }
+    if linked then
+        table.insert(dirs, 1, linked)
+    end
+    for _, dir in ipairs(dirs) do
+        pcall(function()
+            for file in lfs.dir(dir) do
+                if file:sub(-#extension) == extension and not file:find("^%.") then
+                    local basename = file:sub(1, -(#extension + 1))
+                    local number = Storage.chapterNumber(basename)
+                    local key = number and ("#" .. tostring(number)) or basename
+                    if not seen[key] then
+                        seen[key] = true
+                        table.insert(chapters, {
+                            title = basename,
+                            url = "local/" .. basename,
+                            is_local = true,
+                            number = number,
+                        })
+                    end
+                end
             end
-        end
-    end)
-    
-    if not ok or #chapters == 0 then
+        end)
+    end
+
+    if #chapters == 0 then
         return nil
     end
-    
+
     table.sort(chapters, function(a, b)
-        local num_a = tonumber(string.match(a.title, "%d+"))
-        local num_b = tonumber(string.match(b.title, "%d+"))
-        if num_a and num_b and num_a ~= num_b then
-            return num_a < num_b
+        if a.number and b.number and a.number ~= b.number then
+            return a.number < b.number
         end
-        return a.title < b.title
+        return Util.naturalCompare(a.title, b.title)
     end)
 
     if source.reversed_chapters then
@@ -1718,51 +2538,124 @@ function Browser:getLocalChapters(story, source)
     return chapters
 end
 
-function Browser:loadStoryPage(story, source, page, on_return_callback, auto_open_chapter, from_reader, chapter_sort)
-    local function loadOnline()
-        runOnline(function()
-            local page_data, err = withLoading(
-                string.format("Đang tải danh sách chương...\nTrang %d", page),
-                function()
-                    return source:getStoryPage(story, page)
-                end
+local ok_socket, socket = pcall(require, "socket")
+local function preciseNow()
+    if ok_socket and type(socket) == "table" and type(socket.gettime) == "function" then
+        return socket.gettime()
+    end
+    return os.time()
+end
+
+-- Bổ sung trường còn thiếu của truyện từ bản lưu, giữ nguyên đối tượng đang dùng.
+local function fillStory(story, saved)
+    if type(saved) ~= "table" then
+        return
+    end
+    for key, value in pairs(saved) do
+        if story[key] == nil then
+            story[key] = value
+        end
+    end
+end
+
+-- Nguồn sửa story tại chỗ, nhưng khi chạy nền thì việc sửa nằm ở tiến trình
+-- con: chép lại các trường từ kết quả trả về.
+local function copyStory(story, fresh)
+    if type(fresh) ~= "table" or fresh == story then
+        return
+    end
+    for key, value in pairs(fresh) do
+        story[key] = value
+    end
+end
+
+local function clockText(timestamp)
+    return os.date("%H:%M", timestamp or os.time())
+end
+
+-- Dòng trạng thái đầu mục lục; nil khi mới tải lần đầu (không cần báo).
+local function refreshStatusText(page_data)
+    local state = page_data.refresh_state
+    if state == "running" then
+        return "⟳ Đang lấy chương mới…"
+    elseif state == "done" then
+        local when = clockText(page_data.refreshed_at)
+        if (page_data.new_count or 0) > 0 then
+            return string.format("Có %d chương mới · %s", page_data.new_count, when)
+        end
+        return "Đã là mới nhất · " .. when
+    elseif state == "fresh" then
+        return "Cập nhật lúc " .. clockText(page_data.cache_saved_at) .. " · chạm để làm mới"
+    elseif state == "failed" then
+        return "Không cập nhật được · chạm để thử lại"
+    elseif state == "offline" then
+        return "Ngoại tuyến · danh sách lưu lúc " .. clockText(page_data.cache_saved_at)
+    end
+end
+
+local function lastChapterMessage(page_data)
+    local state = page_data.refresh_state
+    if state == "running" then
+        return "Đang lấy chương mới, thử lại sau giây lát."
+    elseif state == "failed" or state == "offline" then
+        return "Đã tới chương cuối trong danh sách đã lưu (chưa cập nhật được)."
+    end
+    return "Đã tới chương cuối cùng ở thời điểm hiện tại."
+end
+
+-- force_refresh: bỏ qua mục lục lưu, tải lại (có hộp chờ).
+function Browser:loadStoryPage(story, source, page, on_return_callback, auto_open_chapter, from_reader, chapter_sort, force_refresh)
+    local started = preciseNow()
+    local sort_mode = chapter_sort or ChapterOrder.defaultMode(source)
+
+    local function present(page_data)
+        Debug.verbose(string.format("[Mục lục] %s trang %d hiện sau %.2fs (%s)",
+            tostring(story.title), page, preciseNow() - started,
+            tostring(page_data.refresh_state or "tải mới")))
+        if auto_open_chapter then
+            local chapter_to_open = autoOpenChapter(
+                page_data.chapters,
+                auto_open_chapter
             )
-            if not page_data then
-                showError(err, on_return_callback)
+            if chapter_to_open then
+                self:openChapter(nil, page_data, source, chapter_to_open, on_return_callback, false, from_reader)
                 return
             end
-            ChapterOrder.apply(
-                page_data,
-                source,
-                chapter_sort or ChapterOrder.defaultMode(source)
-            )
-            Storage:updateFavorite(page_data.story)
-            if auto_open_chapter then
-                local chapter_to_open = autoOpenChapter(
-                    page_data.chapters,
-                    auto_open_chapter
-                )
-                if chapter_to_open then
-                    self:openChapter(nil, page_data, source, chapter_to_open, on_return_callback, false, from_reader)
-                else
-                    self:showChapterList(page_data, source, on_return_callback)
-                end
-            else
-                self:showChapterList(page_data, source, on_return_callback)
-            end
-        end)
+        end
+        self:showChapterList(page_data, source, on_return_callback)
     end
 
-    local is_online = true
-    if NetworkMgr and type(NetworkMgr.isWifiOn) == "function" then
-        is_online = NetworkMgr:isWifiOn()
-    elseif NetworkMgr and type(NetworkMgr.isWIFIOn) == "function" then
-        is_online = NetworkMgr:isWIFIOn()
-    elseif NetworkMgr and type(NetworkMgr.isOnline) == "function" then
-        is_online = NetworkMgr:isOnline()
+    local online = isOnline()
+
+    -- Có mục lục lưu: mở ngay, làm mới nền nếu đã cũ.
+    local cached, saved_at
+    if not force_refresh then
+        cached, saved_at = ChapterCache.get(source.id, story.url, page)
+    end
+    if cached then
+        fillStory(story, cached.story)
+        local page_data = {
+            story = story,
+            page = page,
+            total_pages = tonumber(cached.total_pages) or 1,
+            chapters = cached.chapters,
+            cache_saved_at = saved_at,
+        }
+        ChapterOrder.apply(page_data, source, sort_mode)
+        local age = saved_at and os.time() - saved_at
+        if not online then
+            page_data.refresh_state = "offline"
+        elseif age and age >= 0 and age < ChapterCache.ttl then
+            page_data.refresh_state = "fresh"
+        else
+            page_data.refresh_state = "running"
+            self:startRefresh(page_data, source, on_return_callback)
+        end
+        present(page_data)
+        return
     end
 
-    if not is_online then
+    if not online and not force_refresh then
         local local_chapters = self:getLocalChapters(story, source)
         if local_chapters then
             local page_data = {
@@ -1771,29 +2664,91 @@ function Browser:loadStoryPage(story, source, page, on_return_callback, auto_ope
                 total_pages = 1,
                 chapters = local_chapters,
             }
-            ChapterOrder.apply(
-                page_data,
-                source,
-                chapter_sort or ChapterOrder.defaultMode(source)
-            )
-            if auto_open_chapter then
-                local chapter_to_open = autoOpenChapter(
-                    page_data.chapters,
-                    auto_open_chapter
-                )
-                if chapter_to_open then
-                    self:openChapter(nil, page_data, source, chapter_to_open, on_return_callback, false, from_reader)
-                else
-                    self:showChapterList(page_data, source, on_return_callback)
-                end
-            else
-                self:showChapterList(page_data, source, on_return_callback)
-            end
+            ChapterOrder.apply(page_data, source, sort_mode)
+            present(page_data)
             return
         end
     end
 
-    loadOnline()
+    runOnline(function()
+        local previous = force_refresh and ChapterCache.get(source.id, story.url, page)
+        local page_data, err = withLoading(
+            string.format("Đang tải danh sách chương...\nTrang %d", page),
+            function()
+                return source:getStoryPage(story, page)
+            end
+        )
+        if not page_data then
+            showError(err, on_return_callback)
+            return
+        end
+        -- Lưu theo thứ tự của nguồn; thứ tự hiển thị áp lại mỗi lần mở.
+        ChapterCache.put(source.id, story.url, page, page_data)
+        if previous then
+            page_data.refresh_state = "done"
+            page_data.refreshed_at = os.time()
+            page_data.new_count = ChapterCache.newChapterCount(previous.chapters, page_data.chapters)
+        end
+        ChapterOrder.apply(page_data, source, sort_mode)
+        Storage:updateFavorite(page_data.story)
+        present(page_data)
+    end)
+end
+
+-- Lấy lại mục lục trong tiến trình con; xong thì cập nhật page_data tại chỗ
+-- (openChapter tìm chương kề lúc cần nên thấy được chương mới).
+function Browser:startRefresh(page_data, source, on_return_callback)
+    local story = page_data.story
+    local page = page_data.page
+    local started = preciseNow()
+    local key = table.concat({ tostring(source.id), tostring(story.url), tostring(page) }, "|")
+
+    local function on_done(ok, result, err)
+        Debug.verbose(string.format("[Mục lục] Làm mới nền %s trang %d: %.2fs, %s",
+            tostring(story.title), page, preciseNow() - started, ok and "xong" or tostring(err)))
+        if not ok or type(result) ~= "table" or type(result.chapters) ~= "table" then
+            if err == "cancelled" then
+                -- Bị thay bằng việc làm mới truyện/trang khác.
+                page_data.refresh_state = "fresh"
+            else
+                page_data.refresh_state = "failed"
+                Debug.write("[Mục lục] Không làm mới được " .. tostring(story.title)
+                    .. ": " .. tostring(err or "kết quả sai"))
+            end
+            self:refreshChapterView(page_data, source, on_return_callback)
+            return
+        end
+
+        ChapterCache.put(source.id, story.url, page, result)
+        copyStory(story, result.story)
+        Storage:updateFavorite(story)
+        page_data.new_count = ChapterCache.newChapterCount(page_data.chapters, result.chapters)
+        page_data.chapters = result.chapters
+        page_data.total_pages = tonumber(result.total_pages) or page_data.total_pages
+        ChapterOrder.apply(page_data, source,
+            page_data.chapter_sort or ChapterOrder.defaultMode(source))
+        page_data.refreshed_at = os.time()
+        page_data.cache_saved_at = page_data.refreshed_at
+        page_data.refresh_state = "done"
+        self:refreshChapterView(page_data, source, on_return_callback)
+    end
+
+    local started_ok = BackgroundFetch.run(key, function()
+        return source:getStoryPage(story, page)
+    end, on_done)
+    if not started_ok then
+        -- Không fork được: giữ danh sách lưu, người dùng chạm dòng trạng thái để tải lại.
+        page_data.refresh_state = "failed"
+    end
+end
+
+-- Dựng lại mục lục đang hiện, giữ nguyên trang đang xem.
+function Browser:refreshChapterView(page_data, source, on_return_callback)
+    local view = page_data.view
+    if not view or view._truyenviet_closed or view._truyenviet_hidden then
+        return
+    end
+    view:switchItemTable(nil, self:buildChapterItems(page_data, source, on_return_callback), -1)
 end
 
 local Widget = require("ui/widget/widget")
@@ -1968,82 +2923,217 @@ function Browser:downloadChapters(
     end)
 end
 
+-- Số chương đọc từ tiêu đề (hoặc URL), dùng cho khoảng "từ chương X đến Y"
+local function chapterNumber(chapter)
+    local title = tostring(chapter.title or ""):lower()
+    local number = title:match("chương%s*(%d+%.?%d*)")
+        or title:match("chapter%s*(%d+%.?%d*)")
+        or title:match("chap%s*(%d+%.?%d*)")
+        or title:match("(%d+%.?%d*)")
+        or tostring(chapter.url or ""):match("chap%-(%d+)")
+    return tonumber(number)
+end
+
+-- chapters: toàn bộ chương của truyện, xếp từ cũ nhất đến mới nhất
+function Browser:showDownloadRangeDialog(view, page_data, source, chapters)
+    local story = page_data.story
+    local pending = ChapterDownloader:listPending(source, story, chapters)
+    if #pending == 0 then
+        UIManager:show(InfoMessage:new{
+            title = "Truyện Việt",
+            text = "Tất cả các chương đã được tải.",
+        })
+        return
+    end
+    local already_downloaded = #chapters - #pending
+    local is_pending = {}
+    for _, chapter in ipairs(pending) do
+        is_pending[chapter] = true
+    end
+
+    -- Chọn theo số chương trong tiêu đề nếu chương nào cũng có số,
+    -- nếu không thì theo vị trí trong danh sách (1 = cũ nhất)
+    local keys = {}
+    local by_number = true
+    for index, chapter in ipairs(chapters) do
+        keys[index] = chapterNumber(chapter)
+        if not keys[index] then
+            by_number = false
+        end
+    end
+    if not by_number then
+        for index = 1, #chapters do
+            keys[index] = index
+        end
+    end
+    local lowest, highest = math.huge, -math.huge
+    for _, key in ipairs(keys) do
+        lowest = math.min(lowest, key)
+        highest = math.max(highest, key)
+    end
+
+    local description = string.format(
+        "Truyện có %d chương: đã tải %d, còn %d chưa tải.\nCũ nhất: %s\nMới nhất: %s\n%s",
+        #chapters,
+        already_downloaded,
+        #pending,
+        tostring(chapters[1].title or chapters[1].url),
+        tostring(chapters[#chapters].title or chapters[#chapters].url),
+        by_number
+            and "Nhập số chương theo tiêu đề."
+            or "Nhập vị trí trong danh sách (1 = chương cũ nhất)."
+    )
+    if source.kind == "comic" then
+        description = description
+            .. "\nTruyện tranh có thể tốn nhiều thời gian và dung lượng lưu trữ."
+    end
+
+    local MultiInputDialog = require("ui/widget/multiinputdialog")
+    local dialog
+    local function start(order)
+        local fields = dialog:getFields()
+        local from = tonumber(fields[1])
+        local to = tonumber(fields[2])
+        if not from or not to then
+            UIManager:show(InfoMessage:new{
+                title = "Truyện Việt",
+                text = "Vui lòng nhập số hợp lệ cho cả hai ô.",
+            })
+            return
+        end
+        if from > to then
+            from, to = to, from
+        end
+        local selected = {}
+        for index, chapter in ipairs(chapters) do
+            if is_pending[chapter] and keys[index] >= from and keys[index] <= to then
+                table.insert(selected, chapter)
+            end
+        end
+        if #selected == 0 then
+            UIManager:show(InfoMessage:new{
+                title = "Truyện Việt",
+                text = "Không có chương chưa tải nào trong khoảng này.",
+            })
+            return
+        end
+        if order == "desc" then
+            local reversed = {}
+            for index = #selected, 1, -1 do
+                table.insert(reversed, selected[index])
+            end
+            selected = reversed
+        end
+        closeAndRun(dialog, function()
+            self:downloadChapters(view, page_data, source, selected, already_downloaded)
+        end)
+    end
+
+    dialog = MultiInputDialog:new{
+        title = "Tải chương",
+        fields = {
+            {
+                text = string.format("%g", lowest),
+                hint = "Từ chương",
+                input_type = "number",
+                description = description .. "\n\nTừ chương:",
+            },
+            {
+                text = string.format("%g", highest),
+                hint = "Đến chương",
+                input_type = "number",
+                description = "Đến chương:",
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = "Hủy",
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = "Cũ → mới",
+                    callback = function()
+                        start("asc")
+                    end,
+                },
+                {
+                    text = "Mới → cũ",
+                    callback = function()
+                        start("desc")
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
 function Browser:confirmDownloadChapters(view, page_data, source)
     local story = page_data.story
-    local warning = "Tiến hành tải tất cả các chương chưa có của truyện này?"
-    if source.kind == "comic" then
-        warning = warning .. "\n\nTruyện tranh có thể tốn nhiều thời gian và dung lượng lưu trữ."
-    end
-    UIManager:show(ConfirmBox:new{
-        title = "Truyện Việt",
-        text = warning,
-        ok_text = "Tải các chương",
-        ok_callback = function()
-            UIManager:scheduleIn(0, function()
-                if page_data.total_pages > 1 or type(source.getAllChapters) == "function" then
-                    runOnline(function()
-                        local all_chapters = {}
-                        local fetch_ok = false
-                        local _, err = withLoading("Đang lấy danh sách toàn bộ chương...", function()
-                            if type(source.getAllChapters) == "function" then
-                                local fetched_chapters, fetch_err =
-                                    source:getAllChapters(story)
-                                if not fetched_chapters then
-                                    return nil, fetch_err
-                                end
-                                all_chapters = fetched_chapters
-                            else
-                                for p = 1, page_data.total_pages do
-                                    local p_data = source:getStoryPage(story, p)
-                                    if p_data and p_data.chapters then
-                                        for _, c in ipairs(p_data.chapters) do
-                                            table.insert(all_chapters, c)
-                                        end
-                                    else
-                                        if not p_data or not p_data.chapters or #p_data.chapters == 0 then
-                                            break
-                                        end
-                                    end
-                                end
-                            end
-                            local Util = require("truyenviet/helpers")
-                            all_chapters = Util.uniqueBy(all_chapters or {}, "url")
-                            table.sort(all_chapters, function(a, b)
-                                return Util.naturalCompare(a.title or a.url, b.title or b.url)
-                            end)
-                            fetch_ok = true
-                            return true
-                        end)
-                        if fetch_ok and #all_chapters > 0 then
-                            local pending = ChapterDownloader:listPending(source, story, all_chapters)
-                            local already_downloaded = #all_chapters - #pending
-                            if #pending == 0 then
-                                UIManager:show(InfoMessage:new{
-                                    title = "Truyện Việt",
-                                    text = "Tất cả các chương đã được tải.",
-                                })
-                                return
-                            end
-                            self:downloadChapters(view, {story = story, chapters = all_chapters, page = 1, total_pages = 1}, source, pending, already_downloaded)
-                        else
-                            showError(err or "Lỗi khi lấy danh sách chương")
-                        end
-                    end)
-                else
-                    local pending = ChapterDownloader:listPending(source, story, page_data.chapters)
-                    local already_downloaded = #page_data.chapters - #pending
-                    if #pending == 0 then
-                        UIManager:show(InfoMessage:new{
-                            title = "Truyện Việt",
-                            text = "Tất cả các chương đã được tải.",
-                        })
-                        return
+    if page_data.total_pages > 1 or type(source.getAllChapters) == "function" then
+        runOnline(function()
+            local all_chapters = {}
+            local fetch_ok = false
+            local _, err = withLoading("Đang lấy danh sách toàn bộ chương...", function()
+                if type(source.getAllChapters) == "function" then
+                    local fetched_chapters, fetch_err =
+                        source:getAllChapters(story)
+                    if not fetched_chapters then
+                        return nil, fetch_err
                     end
-                    self:downloadChapters(view, page_data, source, pending, already_downloaded)
+                    all_chapters = fetched_chapters
+                else
+                    for p = 1, page_data.total_pages do
+                        local p_data = source:getStoryPage(story, p)
+                        if p_data and p_data.chapters then
+                            for _, c in ipairs(p_data.chapters) do
+                                table.insert(all_chapters, c)
+                            end
+                        else
+                            if not p_data or not p_data.chapters or #p_data.chapters == 0 then
+                                break
+                            end
+                        end
+                    end
                 end
+                local Util = require("truyenviet/helpers")
+                all_chapters = Util.uniqueBy(all_chapters or {}, "url")
+                table.sort(all_chapters, function(a, b)
+                    return Util.naturalCompare(a.title or a.url, b.title or b.url)
+                end)
+                fetch_ok = true
+                return true
             end)
-        end,
-    })
+            if fetch_ok and #all_chapters > 0 then
+                self:showDownloadRangeDialog(
+                    view,
+                    {story = story, chapters = all_chapters, page = 1, total_pages = 1},
+                    source,
+                    all_chapters
+                )
+            else
+                showError(err or "Lỗi khi lấy danh sách chương")
+            end
+        end)
+    else
+        -- Danh sách đang hiện theo thứ tự người dùng chọn; đưa về cũ nhất trước
+        local chapters = {}
+        local sort_mode = page_data.chapter_sort or ChapterOrder.defaultMode(source)
+        if sort_mode == "desc" then
+            for index = #page_data.chapters, 1, -1 do
+                table.insert(chapters, page_data.chapters[index])
+            end
+        else
+            for _, chapter in ipairs(page_data.chapters) do
+                table.insert(chapters, chapter)
+            end
+        end
+        self:showDownloadRangeDialog(view, page_data, source, chapters)
+    end
 end
 
 function Browser:confirmDownloadBundle(view, page_data, source)
@@ -2186,12 +3276,38 @@ function Browser:downloadAsBundle(story, source, all_chapters)
     end)
 end
 
-function Browser:showChapterList(page_data, source, on_return_callback)
+-- Các mục của danh sách chương; view lấy từ page_data.view lúc chạm vì
+-- danh sách có thể được dựng lại sau khi làm mới nền.
+function Browser:buildChapterItems(page_data, source, on_return_callback)
     local story = page_data.story
-    local view
     local sort_mode = page_data.chapter_sort
         or ChapterOrder.defaultMode(source)
-    local items = {
+    local items = {}
+    local status = refreshStatusText(page_data)
+    if status then
+        table.insert(items, {
+            text = status,
+            dim = page_data.refresh_state == "running" or nil,
+            callback = function()
+                if page_data.refresh_state == "running" then
+                    return
+                end
+                closeAndRun(page_data.view, function()
+                    self:loadStoryPage(
+                        story,
+                        source,
+                        page_data.page,
+                        on_return_callback,
+                        false,
+                        nil,
+                        sort_mode,
+                        true
+                    )
+                end)
+            end,
+        })
+    end
+    local fixed_items = {
         {
             text = Storage:isFavorite(story)
                 and "Xóa khỏi tủ truyện"
@@ -2199,7 +3315,7 @@ function Browser:showChapterList(page_data, source, on_return_callback)
             mandatory = source.name,
             callback = function()
                 toggleFavorite(story, function()
-                    closeAndRun(view, function()
+                    closeAndRun(page_data.view, function()
                         self:showChapterList(page_data, source, on_return_callback)
                     end)
                 end)
@@ -2217,7 +3333,7 @@ function Browser:showChapterList(page_data, source, on_return_callback)
                     page_data.total_pages,
                     next_mode
                 )
-                closeAndRun(view, function()
+                closeAndRun(page_data.view, function()
                     self:loadStoryPage(
                         story,
                         source,
@@ -2231,19 +3347,22 @@ function Browser:showChapterList(page_data, source, on_return_callback)
             end,
         },
     }
+    for _, item in ipairs(fixed_items) do
+        table.insert(items, item)
+    end
 
     if #page_data.chapters > 0 then
         table.insert(items, {
-            text = "Tải tất cả các chương",
+            text = "Tải truyện",
             callback = function()
-                self:confirmDownloadChapters(view, page_data, source)
+                self:confirmDownloadChapters(page_data.view, page_data, source)
             end,
         })
         if source.kind == "text" then
             table.insert(items, {
                 text = "Tải thành 1 bộ (gom tất cả chương)",
                 callback = function()
-                    self:confirmDownloadBundle(view, page_data, source)
+                    self:confirmDownloadBundle(page_data.view, page_data, source)
                 end,
             })
         end
@@ -2264,7 +3383,7 @@ function Browser:showChapterList(page_data, source, on_return_callback)
         table.insert(items, {
             text = "← Trang chương trước",
             callback = function()
-                closeAndRun(view, function()
+                closeAndRun(page_data.view, function()
                     self:loadStoryPage(
                         story,
                         source,
@@ -2282,7 +3401,7 @@ function Browser:showChapterList(page_data, source, on_return_callback)
         table.insert(items, {
             text = "Trang chương sau →",
             callback = function()
-                closeAndRun(view, function()
+                closeAndRun(page_data.view, function()
                     self:loadStoryPage(
                         story,
                         source,
@@ -2305,11 +3424,11 @@ function Browser:showChapterList(page_data, source, on_return_callback)
                 return Storage:isDownloaded(source, story, current_chapter) and "Đã tải" or ""
             end,
             callback = function()
-                self:openChapter(view, page_data, source, current_chapter, on_return_callback)
+                self:openChapter(page_data.view, page_data, source, current_chapter, on_return_callback)
             end,
             hold_callback = function()
                 self:showChapterActions(
-                    view,
+                    page_data.view,
                     page_data,
                     source,
                     current_chapter,
@@ -2327,7 +3446,12 @@ function Browser:showChapterList(page_data, source, on_return_callback)
         })
     end
 
-    view = showView(story.title, items, on_return_callback)
+    return items
+end
+
+function Browser:showChapterList(page_data, source, on_return_callback)
+    local items = self:buildChapterItems(page_data, source, on_return_callback)
+    page_data.view = showView(page_data.story.title, items, on_return_callback)
 end
 
 function Browser:openChapter(view, page_data, source, chapter, on_return_callback, force, from_reader)
@@ -2341,33 +3465,23 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
 
     local chapter_sort = page_data.chapter_sort
         or ChapterOrder.defaultMode(source)
-    local next_chapter
-    local prev_chapter
-    for i, c in ipairs(page_data.chapters) do
-        local match = false
-        if c.url == chapter.url then
-            match = true
-        elseif c.is_local and chapter.is_local and c.title == chapter.title then
-            match = true
-        elseif c.is_local and not chapter.is_local then
-            if c.title == chapter.title or c.url == ("local/" .. chapter.title) then
-                match = true
-            end
-        end
-        
-        if match then
-            next_chapter = page_data.chapters[
+    -- Tìm lúc bấm chuyển chương: mục lục có thể vừa được làm mới nền.
+    local function findNeighbors()
+        local i = ChapterPosition.indexOf(page_data.chapters, chapter)
+        if i then
+            return page_data.chapters[
                 ChapterOrder.nextChapterIndex(chapter_sort, i)
-            ]
-            prev_chapter = page_data.chapters[
+            ], page_data.chapters[
                 ChapterOrder.prevChapterIndex(chapter_sort, i)
             ]
-            break
         end
     end
+    local position_text = ChapterPosition.format(
+        ChapterPosition.fromChapterList(page_data, chapter, chapter_sort))
 
     local function on_next_chapter(called_from_reader)
         local from_reader_flag = (called_from_reader ~= nil) and called_from_reader or from_reader
+        local next_chapter = findNeighbors()
         Debug.write("Browser:on_next_chapter triggered, next_chapter=" .. tostring(next_chapter ~= nil) .. ", from_reader=" .. tostring(from_reader_flag))
         UIManager:nextTick(function()
             if next_chapter then
@@ -2415,18 +3529,19 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
                     else
                         UIManager:show(InfoMessage:new{
                         title = "Truyện Việt",
-                        text = "Đã tới chương cuối cùng ở thời điểm hiện tại." })
+                        text = lastChapterMessage(page_data) })
                     end
                 else
                     UIManager:show(InfoMessage:new{
                     title = "Truyện Việt",
-                    text = "Đã tới chương cuối cùng ở thời điểm hiện tại." })
+                    text = lastChapterMessage(page_data) })
                 end
             end)
         end
 
     local function on_prev_chapter(called_from_reader)
         local from_reader_flag = (called_from_reader ~= nil) and called_from_reader or from_reader
+        local _, prev_chapter = findNeighbors()
         Debug.write("Browser:on_prev_chapter triggered, prev_chapter=" .. tostring(prev_chapter ~= nil) .. ", from_reader=" .. tostring(from_reader_flag))
         UIManager:nextTick(function()
             if prev_chapter then
@@ -2488,6 +3603,7 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         if view then UIManager:close(view) end
         Storage:saveHistory(story, chapter)
         Debug.write("Browser:existing found, calling Reader:show existing=" .. tostring(existing) .. ", from_reader=" .. tostring(from_reader))
+        Reader:setPosition(existing, position_text)
         Reader:show(existing, function()
             self:showChapterList(page_data, source, on_return_callback)
             end, on_next_chapter, from_reader, on_prev_chapter)
@@ -2547,6 +3663,7 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         if view then UIManager:close(view) end
         Storage:saveHistory(story, chapter)
         Debug.write("Browser:build completed, path=" .. tostring(path) .. ", from_reader=" .. tostring(from_reader))
+        Reader:setPosition(path, position_text)
         Reader:show(path, function()
             self:showChapterList(page_data, source, on_return_callback)
         end, on_next_chapter, from_reader, on_prev_chapter)
@@ -3227,7 +4344,7 @@ function Browser:searchDilib(source, query, on_return_callback, parent_view)
             local current_book = book
             table.insert(items, {
                 text = current_book.title,
-                mandatory = current_book.author or "",
+                mandatory = Util.shorten(current_book.author, 24),
                 callback = function()
                     closeAndRun(view, function()
                         self:showDilibBookDetail(source, current_book, function()
@@ -3581,27 +4698,37 @@ function Browser:triggerPrefetchAndPurge(source, story, page_data, current_chapt
 
     if not curr_idx then return end
 
+    -- Danh sách có thể đang hiện "Mới nhất trước": tính hướng đi tới chương mới hơn
+    -- để không xóa nhầm chương mới và tải trước nhầm chương cũ
+    local sort_mode = page_data.chapter_sort or ChapterOrder.defaultMode(source)
+    local newer_step = sort_mode == "desc" and -1 or 1
+
     -- 1. Auto Purging (Xóa cuốn chiếu A - Purge Distance)
     if Storage:isAutoPurgeEnabled() then
-        local purge_dist = Storage:getPurgeDistance()
-        local purge_target_idx = curr_idx - purge_dist
-        if purge_target_idx >= 1 then
-            for p = 1, purge_target_idx do
-                local old_chap = page_data.chapters[p]
-                if old_chap and Storage:isDownloaded(source, story, old_chap) then
-                    Storage:removeDownload(source, story, old_chap)
-                    Debug.write("[AutoPurge] Removed old chapter: " .. tostring(old_chap.title))
-                end
+        local purge_dist = math.max(1, tonumber(Storage:getPurgeDistance()) or 1)
+        local p = curr_idx - newer_step * purge_dist
+        while p >= 1 and p <= #page_data.chapters do
+            local old_chap = page_data.chapters[p]
+            if old_chap and Storage:isDownloaded(source, story, old_chap) then
+                Storage:removeDownload(source, story, old_chap)
+                Debug.write("[AutoPurge] Removed old chapter: " .. tostring(old_chap.title))
             end
+            p = p - newer_step
         end
     end
 
     -- 2. Rolling Prefetching (Tải ngầm A + 1, A + 2, A + 3)
-    if Storage:isPrefetchEnabled() then
+    -- Truyện tranh (hoặc nguồn không có getChapterAsync) tải cả chương một mạch trên UI loop,
+    -- chặn thao tác lật trang hàng chục giây khiến Android báo ANR và đóng KOReader
+    local can_prefetch_async = source.kind ~= "comic" and type(source.getChapterAsync) == "function"
+    if Storage:isPrefetchEnabled() and not can_prefetch_async then
+        Debug.write("[RollingPrefetch] Skipped: source downloads synchronously")
+    end
+    if Storage:isPrefetchEnabled() and can_prefetch_async then
         local prefetch_count = Storage:getPrefetchCount()
         local prefetch_chaps = {}
         for p = 1, prefetch_count do
-            local next_c = page_data.chapters[curr_idx + p]
+            local next_c = page_data.chapters[curr_idx + newer_step * p]
             if next_c and not Storage:isDownloaded(source, story, next_c) then
                 table.insert(prefetch_chaps, next_c)
             end
@@ -3691,12 +4818,12 @@ function Browser:showGDriveDownloadDialog(on_return)
                                 local filename = saved_path:match("([^/\\]+)$") or saved_path
                                 local success_dialog
                                 success_dialog = ButtonDialog:new{
-                                    title = "Tải thành công! ☁️",
+                                    title = "Tải thành công! ☁",
                                     description = "Đã tải file thành công về máy:\n" .. filename .. "\n\nĐường dẫn:\n" .. saved_path,
                                     buttons = {
                                         {
                                             {
-                                                text = "📖 Mở đọc ngay",
+                                                text = "▶ Mở đọc ngay",
                                                 is_default = true,
                                                 callback = function()
                                                     UIManager:close(success_dialog)
@@ -3770,7 +4897,7 @@ function Browser:showDirectImporterDialog(on_return)
                             buttons = {
                                 {
                                     {
-                                        text = "🤖 Tự động (Local Heuristic -> Firecrawl Fallback)",
+                                        text = "⚙ Tự động (Local Heuristic -> Firecrawl Fallback)",
                                         is_default = true,
                                         callback = function()
                                             UIManager:close(choice_dialog)
@@ -3789,7 +4916,7 @@ function Browser:showDirectImporterDialog(on_return)
                                 },
                                 {
                                     {
-                                        text = "🚀 Chỉ dùng Local Engine (Bóc tách HTML offline)",
+                                        text = "⚡ Chỉ dùng Local Engine (Bóc tách HTML offline)",
                                         callback = function()
                                             UIManager:close(choice_dialog)
                                             self:executeImport(url, "local", on_return)
@@ -3929,7 +5056,7 @@ function Browser:showMergeOptionsDialog(item, on_return)
                 end,
             },
             {
-                text = "🚀 BẮT ĐẦU GỘP FILE",
+                text = "⚡ BẮT ĐẦU GỘP FILE",
                 mandatory = "Thực hiện",
                 callback = function()
                     local Trapper = require("ui/trapper")
@@ -3963,7 +5090,7 @@ function Browser:showMergeOptionsDialog(item, on_return)
         }
 
         local view = ListView:new{
-            title = "⚙️ Cấu Hình Gộp File: " .. item.story_slug,
+            title = "⚙ Cấu Hình Gộp File: " .. item.story_slug,
             item_table = items,
             on_return_callback = on_return,
         }
@@ -4000,7 +5127,7 @@ function Browser:showDownloadedStoryChapters(item, on_return)
                     buttons = {
                         {
                             {
-                                text = "📖 Đọc chương này",
+                                text = "▶ Đọc chương này",
                                 callback = function()
                                     UIManager:close(dlg)
                                     Reader:show(current_chap.path, function()
@@ -4009,7 +5136,7 @@ function Browser:showDownloadedStoryChapters(item, on_return)
                                 end,
                             },
                             {
-                                text = "🗑️ Xóa chương này",
+                                text = "✕ Xóa chương này",
                                 callback = function()
                                     UIManager:close(dlg)
                                     os.remove(current_chap.path)
@@ -4026,7 +5153,7 @@ function Browser:showDownloadedStoryChapters(item, on_return)
     end
 
     local view = ListView:new{
-        title = "📋 Danh Sách Chương (" .. #chapters .. " chương)",
+        title = "☰ Danh Sách Chương (" .. #chapters .. " chương)",
         item_table = items,
         on_return_callback = on_return,
     }
@@ -4055,7 +5182,7 @@ function Browser:showDownloadedManager(on_return)
             callback = function()
                 local story_menu_items = {
                     {
-                        text = "⚙️ Gộp file (Tùy chọn EPUB/HTML, Bìa, Mục lục, Tên file...)",
+                        text = "⚙ Gộp file (Tùy chọn EPUB/HTML, Bìa, Mục lục, Tên file...)",
                         callback = function()
                             self:showMergeOptionsDialog(cur_item, function()
                                 self:showDownloadedManager(on_return)
@@ -4063,7 +5190,7 @@ function Browser:showDownloadedManager(on_return)
                         end,
                     },
                     {
-                        text = "📋 Xem & Xóa từng chương lẻ (" .. cur_item.chapter_count .. " chương)",
+                        text = "☰ Xem & Xóa từng chương lẻ (" .. cur_item.chapter_count .. " chương)",
                         callback = function()
                             self:showDownloadedStoryChapters(cur_item, function()
                                 self:showDownloadedManager(on_return)
@@ -4071,7 +5198,7 @@ function Browser:showDownloadedManager(on_return)
                         end,
                     },
                     {
-                        text = "🗑️ Xóa tất cả chương của truyện này",
+                        text = "✕ Xóa tất cả chương của truyện này",
                         callback = function()
                             local ConfirmBox = require("ui/widget/confirmbox")
                             UIManager:show(ConfirmBox:new{

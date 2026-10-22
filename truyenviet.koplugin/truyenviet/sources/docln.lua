@@ -9,6 +9,8 @@ local Source = {
     kind = "text",
     base_url = "https://docln.sbs",
     max_concurrent = 2,
+    -- DocLN hay 429 khi dồn request: lấy meta tuần tự từng truyện
+    meta_concurrency = 1,
 }
 
 -- Login credentials
@@ -157,6 +159,23 @@ end
 -- SEARCH & LISTING
 -- ========================
 
+-- Số chương từ nhãn "Chương 95: ...", "CHƯƠNG 9", "Chương 2.2: ...", "Chap 1: ...";
+-- nil nếu nhãn không có số ("Lời bạt", "Chương cuối", "Minh họa") hoặc số <= 0.
+local CHAPTER_LABELS = { "Chương", "CHƯƠNG", "chương", "Chapter", "CHAPTER", "Chap", "CHAP" }
+
+local function chapterNumberFromLabel(label)
+    local text = Util.trim(tostring(label or ""))
+    for _, prefix in ipairs(CHAPTER_LABELS) do
+        local number = text:match("^" .. prefix .. "%s*(%d+%.%d+)")
+            or text:match("^" .. prefix .. "%s*(%d+)")
+        number = tonumber(number)
+        if number and number > 0 then
+            return number
+        end
+    end
+    return nil
+end
+
 function Source:parseSearch(html)
     local stories = {}
 
@@ -190,12 +209,19 @@ function Source:parseSearch(html)
             if href and title and title ~= "" then
                 -- Only include /truyen/ links (truyện dịch)
                 if href:find("/truyen/", 1, true) or href:find("/sang%-tac/") or href:find("/ai%-dich/") then
+                    -- Thẻ truyện ghi sẵn chương mới nhất (div.chapter-title): đọc luôn,
+                    -- không cần request thêm.
+                    local chapter_label = item_html:match(
+                        '<div[^>]-class="[^"]*chapter%-title[^"]*"[^>]*>([%s%S]-)</div>'
+                    )
                     table.insert(stories, {
                         source_id = self.id,
                         title = Util.decodeHtml(title),
                         url = Util.absoluteUrl(self.base_url, href),
                         cover_url = cover_url,
                         kind = self.kind,
+                        latest_chapter = chapter_label
+                            and chapterNumberFromLabel(Util.stripTags(chapter_label)),
                     })
                 end
             end
@@ -208,10 +234,10 @@ function Source:parseSearch(html)
 end
 
 function Source:search(query)
-    -- DocLN search: use the danh-sach page with search param
+    -- DocLN search: form tìm kiếm dùng tham số `keywords` (tham số `q` trả trang rỗng)
     local encoded = ko_util.urlEncode(query):gsub("%%20", "+")
     local html, err = Http:get(
-        self.base_url .. "/tim-kiem?q=" .. encoded,
+        self.base_url .. "/tim-kiem?keywords=" .. encoded,
         requestHeaders()
     )
     if not html then
@@ -378,6 +404,49 @@ function Source:getStoryPage(story, page)
         return nil, err
     end
     return self:parseStoryPage(html, story, page)
+end
+
+-- Số chương + trạng thái cho kết quả tìm kiếm: 1 request trang truyện
+-- (danh sách chương nằm trọn trong trang). Không đăng nhập để khỏi tốn thêm request;
+-- chỉ dùng cookie phiên nếu đã có sẵn.
+function Source:fetchSearchMeta(story)
+    local headers = { ["Referer"] = self.base_url .. "/" }
+    if session_cookie and session_cookie ~= "" then
+        headers["Cookie"] = session_cookie
+    end
+    local html, err = Http:get(story.url, headers)
+    if not html then
+        return nil, err
+    end
+
+    local scratch = { url = story.url }
+    local page = self:parseStoryPage(html, scratch, 1)
+    local meta = {}
+    if page and #page.chapters > 0 then
+        meta.chapter_count = #page.chapters
+    end
+    -- Ưu tiên chương mới nhất đã đọc từ thẻ tìm kiếm. Nếu chưa có thì lấy chương có số
+    -- cuối cùng trong danh sách (tập/quyển xếp cũ -> mới, chương trong tập xếp cũ -> mới;
+    -- bỏ qua "Minh họa", "Lời bạt"...). Không lấy số lớn nhất vì nhiều truyện đánh số
+    -- lại từ 1 ở mỗi tập.
+    meta.latest_chapter = story.latest_chapter
+    if not meta.latest_chapter and page then
+        for index = #page.chapters, 1, -1 do
+            local number = chapterNumberFromLabel(page.chapters[index].title)
+            if number then
+                meta.latest_chapter = number
+                break
+            end
+        end
+    end
+    local status = scratch.details and scratch.details.status
+    if status and status ~= "" then
+        meta.completed = status:find("hoàn thành", 1, true) ~= nil
+    end
+    if meta.chapter_count == nil and meta.completed == nil and meta.latest_chapter == nil then
+        return nil, "Không đọc được số chương"
+    end
+    return meta
 end
 
 -- ========================
@@ -590,6 +659,8 @@ end
 local last_request_time = 0
 
 local function applyRateLimit()
+    -- copas.sleep yield coroutine: chỉ gọi khi đang chạy trong coroutine (thread copas)
+    if not coroutine.running() then return end
     local ok, copas = pcall(require, "copas")
     if ok and copas and copas.sleep then
         local now = (socket and socket.gettime and socket.gettime()) or os.time()

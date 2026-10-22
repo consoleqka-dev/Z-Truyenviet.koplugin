@@ -262,8 +262,46 @@ local function parseStoryAnchors(source, html)
     return stories
 end
 
+-- Trang tìm kiếm có khối `story-item-list`: số chương mới nhất nằm ở link
+-- `story-item-list__chapter`, huy hiệu "Full" cho truyện đã hoàn thành.
+-- Tách theo từng khối để thiếu link chương không làm lệch sang truyện kế bên.
+local function parseItemMeta(source, html)
+    local meta = {}
+    local marker = 'class="story-item-list d-flex'
+    local starts = {}
+    local from = 1
+    while true do
+        local at = html:find(marker, from, true)
+        if not at then break end
+        starts[#starts + 1] = at
+        from = at + #marker
+    end
+    for index, start_at in ipairs(starts) do
+        local block = html:sub(start_at, (starts[index + 1] or (#html + 1)) - 1)
+        local url = canonicalStoryUrl(source.base_url, block:match('href="([^"]*/truyen/[^"]+)"'))
+        if url then
+            local label = block:match('story%-item%-list__chapter[^>]*>([^<]*)</a>')
+            local count = label and tonumber(label:match("(%d+)"))
+            meta[url] = {
+                latest_chapter = count and count > 0 and count or nil,
+                completed = block:find(">Full</span>", 1, true) ~= nil,
+            }
+        end
+    end
+    return meta
+end
+
 function Source:parseSearch(html)
-    return parseStoryAnchors(self, html)
+    local stories = parseStoryAnchors(self, html)
+    local meta = parseItemMeta(self, tostring(html or ""))
+    for _, story in ipairs(stories) do
+        local item = meta[story.url]
+        if item then
+            story.latest_chapter = item.latest_chapter
+            story.completed = item.completed
+        end
+    end
+    return stories
 end
 
 function Source:search(query)
@@ -271,7 +309,7 @@ function Source:search(query)
         return self:getCompleted(1)
     end
     local encoded = ko_util.urlEncode(query):gsub("%%20", "+")
-    local url = self.base_url .. "/tim-kiem?keyword=" .. encoded
+    local url = self.base_url .. "/tim-kiem?key_word=" .. encoded
     local html, err = self:authGet(url)
     if not html then return nil, err end
     local stories = self:parseSearch(html)

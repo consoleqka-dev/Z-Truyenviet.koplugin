@@ -96,17 +96,20 @@ assert(type(Plugin.onTruyenVietCheckUpdate) == "function", "onTruyenVietCheckUpd
 
 -- ==================== ZenOS Compatibility Verification ====================
 -- ZenOS checks LAUNCH_METHODS = { "onShow", "show", "open", "launch", "onOpen" }
--- and camel = "on" .. key:sub(1,1):upper() .. key:sub(2) -> "onTruyenviet"
+-- and camel = "on" .. key:sub(1,1):upper() .. key:sub(2) -> "onTruyenviet".
+-- onShow/onOpen must NOT exist: KOReader broadcasts Show/Open events to plugin
+-- modules, which would reopen the browser over a freshly opened chapter.
 local LAUNCH_METHODS = { "onShow", "show", "open", "launch", "onOpen" }
-for _, method in ipairs(LAUNCH_METHODS) do
+assert(Plugin.onShow == nil, "Plugin must not define onShow (Show event is broadcast)")
+assert(Plugin.onOpen == nil, "Plugin must not define onOpen (Open event is broadcast)")
+for _, method in ipairs({ "show", "open", "launch", "onTruyenviet" }) do
     assert(type(Plugin[method]) == "function", "Plugin must define launch method: " .. method)
 end
-assert(type(Plugin.onTruyenviet) == "function", "Plugin must define onTruyenviet method")
 
--- Test that executing onShow triggers browser:showRoot()
+-- Test that the ZenOS launch method triggers browser:showRoot()
 browser_show_root_called = false
-Plugin:onShow()
-assert(browser_show_root_called == true, "Plugin:onShow() must invoke Browser:showRoot()")
+Plugin:show()
+assert(browser_show_root_called == true, "Plugin:show() must invoke Browser:showRoot()")
 
 -- Test ZenOS scan method resolution
 local function is_callable(v) return type(v) == "function" end
@@ -119,7 +122,7 @@ local function find_method(mod, key)
 end
 
 local zenos_detected_method = find_method(Plugin, "truyenviet")
-assert(zenos_detected_method == "onShow", "ZenOS must discover onShow launch method")
+assert(zenos_detected_method == "show", "ZenOS must discover the show launch method")
 
 -- Test alphabetical sorting under ZenOS "Choose plugin menu"
 local plugin_titles = {

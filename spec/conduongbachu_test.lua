@@ -226,5 +226,29 @@ assertEqual(
 local searched = assert(Source:search("bá chủ"))
 assertEqual(4, #searched, "search returns all matching Con Đường Bá Chủ stories")
 assertEqual(true, #requested_urls > 0, "uses the WordPress source requests")
+assertEqual(true, searched[1].completed, "main story is flagged completed")
+assertEqual(false, searched[4].completed, "Chúa Tể Chi Lộ is flagged ongoing")
+
+local before_search = #requested_urls
+assert(Source:search("ngoại truyện"))
+assertEqual(before_search, #requested_urls, "search does not hit the site search page")
+
+local meta_url = "https://conduongbachu.com/wp-json/wp/v2/posts?categories=15&per_page=10&_fields=link,title&order=desc&orderby=date"
+responses[meta_url] = {
+    body = '[{"link":"https://conduongbachu.com/chuong-64-a/","title":{"rendered":"Chương 64: A"}},'
+        .. '{"link":"https://conduongbachu.com/chuong-65-b/","title":{"rendered":"Chương 65: B"}},'
+        .. '{"link":"https://conduongbachu.com/chuong-63-c/","title":{"rendered":"Chương 63: C"}}]',
+    headers = { ["X-WP-Total"] = "65" },
+}
+local meta = assert(Source:fetchSearchMeta(searched[4]))
+assertEqual(65, meta.chapter_count, "reads chapter count from x-wp-total header")
+assertEqual(65, meta.latest_chapter, "latest chapter is the max chapter number, not the first post")
+assertEqual(false, meta.completed, "returns the static completed flag")
+
+local requests_after_meta = #requested_urls
+assert(Source:fetchSearchMeta(searched[4]))
+assertEqual(requests_after_meta, #requested_urls, "caches the chapter count")
+assertEqual(65, Source:search("chúa tể")[1].chapter_count, "cached count is applied to later results")
+assertEqual(65, Source:search("chúa tể")[1].latest_chapter, "cached latest chapter is applied to later results")
 
 print("ConDuongBachu tests passed: " .. assertions .. " assertions")

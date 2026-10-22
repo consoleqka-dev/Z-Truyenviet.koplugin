@@ -8,7 +8,7 @@ Plugin KOReader thuần Lua đọc truyện chữ & truyện tranh đa nguồn:
 - Truyện chữ từ [storya.click](https://storya.click) 
 - Truyện chữ từ [metruyenchuvn.com](https://metruyenchuvn.com) 
 - Truyện chữ & Tranh từ [vireal.vn](https://vireal.vn)
-- Truyện chữ từ [truyendich.ai](https://truyendich.ai)
+- Truyện chữ từ [truyendich.space](https://truyendich.space)
 - Truyện tranh từ [cbunu.com](https://cbunu.com)
 - Truyện tranh từ [haccbl.xyz](https://haccbl.xyz)
 - Truyện chữ từ [giatocvuongtai.com](https://giatocvuongtai.com)

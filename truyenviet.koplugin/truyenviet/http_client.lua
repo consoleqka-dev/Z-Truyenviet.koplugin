@@ -8,6 +8,7 @@ if not ok_su or type(socketutil) ~= "table" then
 end
 local ko_util = require("util")
 local Debug = require("truyenviet/debugger")
+local AsyncPool = require("truyenviet/async_pool")
 
 local parse_url = socket_url.parse
 local function parseProxy(proxy_str)
@@ -80,7 +81,7 @@ local function create_proxy_socket(proxy_host, proxy_port, target_host, target_p
             return 1
         end
         
-        Debug.write(string.format("[PROXY CONNECT SUCCESS] Tunnel established to %s:%d", target_host, target_port))
+        Debug.verbose(string.format("[PROXY CONNECT SUCCESS] Tunnel established to %s:%d", target_host, target_port))
         return conn
     end
 end
@@ -95,7 +96,7 @@ if not http._original_request then
         local proxy_host, proxy_port = parseProxy(old_proxy)
         local is_https = url_str and url_str:lower():sub(1, 8) == "https://"
         
-        Debug.write(string.format("[HTTP wrapper] request: %s, is_https: %s, proxy: %s", tostring(url_str), tostring(is_https), tostring(old_proxy)))
+        Debug.verbose(string.format("[HTTP wrapper] request: %s, is_https: %s, proxy: %s", tostring(url_str), tostring(is_https), tostring(old_proxy)))
         
         if is_https and proxy_host then
             local target_host, target_port = parseTarget(url_str)
@@ -234,20 +235,52 @@ local function curlFallback(method, url, request_headers)
     return content, nil, {}, 200
 end
 
+-- Mặc định khi một request đồng bộ được chuyển sang nhánh async trong pool:
+-- timeout ngắn, ít retry, không curl (io.popen sẽ chặn toàn bộ Copas).
+local POOL_REQUEST_TIMEOUT = 10
+local POOL_REQUEST_MAX_RETRIES = 1
+
 function HttpClient:request(method, url, body, headers, options)
+    -- Đang chạy trong thread của AsyncPool: mọi Http:get/post/postForm/getJson
+    -- của nguồn tự động chuyển sang requestAsync (non-blocking). Ngoài pool
+    -- (kể cả coroutine của Trapper) hành vi giữ nguyên như cũ.
+    -- Lưu ý: nhánh async dùng copas.http (tự gắn SNI) nên bỏ qua
+    -- options.force_luasec; nguồn cần force_luasec/curl sẽ được SearchService
+    -- thử lại tuần tự ngoài pool khi lỗi TLS.
+    if AsyncPool.inPoolThread() then
+        local async_opts = {}
+        if type(options) == "table" then
+            for key, value in pairs(options) do
+                async_opts[key] = value
+            end
+        end
+        if async_opts.timeout == nil then
+            async_opts.timeout = POOL_REQUEST_TIMEOUT
+        end
+        if async_opts.max_retries == nil then
+            async_opts.max_retries = POOL_REQUEST_MAX_RETRIES
+        end
+        if async_opts.no_curl == nil then
+            async_opts.no_curl = true
+        end
+        return self:requestAsync(method, url, body, headers, async_opts)
+    end
+
     if not validateUrl(url) then
         Debug.write(string.format("[HTTP ERROR] Invalid URL: %s", tostring(url)))
         return nil, "URL không hợp lệ: " .. tostring(url)
     end
 
-    Debug.write(string.format("[HTTP request start] %s %s", method, url))
-    Debug.write(string.format("  http.PROXY = %s", tostring(http.PROXY)))
+    Debug.verbose(string.format("[HTTP request start] %s %s", method, url))
+    Debug.verbose(string.format("  http.PROXY = %s", tostring(http.PROXY)))
     local request_headers = mergeHeaders(headers)
-    for k, v in pairs(request_headers) do
-        Debug.write(string.format("  Req Header: %s: %s", k, v))
+    if Debug.isVerbose() then
+        for k, v in pairs(request_headers) do
+            Debug.write(string.format("  Req Header: %s: %s", k, v))
+        end
     end
     if body then
-        Debug.write(string.format("  Req Body (len=%d): %s", #body, tostring(body):sub(1, 200)))
+        Debug.verbose(string.format("  Req Body (len=%d): %s", #body, tostring(body):sub(1, 200)))
     end
 
     local redirect = true
@@ -342,14 +375,16 @@ function HttpClient:request(method, url, body, headers, options)
     end
 
     local numeric_code = result_code
-    Debug.write(string.format("[HTTP request respond] %s %s -> code: %s, numeric_code: %s", method, url, tostring(code), tostring(numeric_code)))
-    for k, v in pairs(response_headers) do
-        Debug.write(string.format("  Resp Header: %s: %s", k, tostring(v)))
+    Debug.verbose(string.format("[HTTP request respond] %s %s -> code: %s, numeric_code: %s", method, url, tostring(code), tostring(numeric_code)))
+    if Debug.isVerbose() then
+        for k, v in pairs(response_headers) do
+            Debug.write(string.format("  Resp Header: %s: %s", k, tostring(v)))
+        end
     end
 
     if not numeric_code or numeric_code < 200 or numeric_code >= 300 then
         local error_body = table.concat(sink)
-        Debug.write(string.format("  Resp Error Body (len=%d): %s", #error_body, safeLogPreview(error_body, response_headers, 500)))
+        Debug.write(string.format("  Resp Error %s %s -> HTTP %s, body (len=%d): %s", method, url, tostring(numeric_code or code), #error_body, safeLogPreview(error_body, response_headers, 500)))
         
         if redirect ~= false and numeric_code and numeric_code >= 300 and numeric_code < 400 and response_headers["location"] then
             local new_url = response_headers["location"]
@@ -382,7 +417,7 @@ function HttpClient:request(method, url, body, headers, options)
         return nil, "Bị chặn bởi Cloudflare (Anti-Bot)", response_headers, 403, content
     end
 
-    Debug.write(string.format("  Resp Body (len=%d): %s", #content, safeLogPreview(content, response_headers, 100)))
+    Debug.verbose(string.format("  Resp Body (len=%d): %s", #content, safeLogPreview(content, response_headers, 100)))
     local content_length = tonumber(response_headers["content-length"])
     if content_length and #content ~= content_length then
         Debug.write(string.format("[HTTP ERROR] Incomplete body: expected %d, got %d", content_length, #content))
@@ -414,16 +449,22 @@ function HttpClient:requestAsync(method, url, body, headers, opts)
         return nil, "URL không hợp lệ: " .. tostring(url)
     end
     
-    Debug.write(string.format("[HTTP Async request start] %s %s", method, url))
+    Debug.verbose(string.format("[HTTP Async request start] %s %s", method, url))
     local request_headers = mergeHeaders(headers)
-    for k, v in pairs(request_headers) do
-        Debug.write(string.format("  Req Header: %s: %s", k, v))
+    if Debug.isVerbose() then
+        for k, v in pairs(request_headers) do
+            Debug.write(string.format("  Req Header: %s: %s", k, v))
+        end
     end
     if body then
-        Debug.write(string.format("  Req Body (len=%d): %s", #body, tostring(body):sub(1, 200)))
+        Debug.verbose(string.format("  Req Body (len=%d): %s", #body, tostring(body):sub(1, 200)))
     end
 
-    local copas_http = require("copas.http")
+    local copas_ok, copas_http = pcall(require, "copas.http")
+    if not copas_ok then
+        Debug.write(string.format("[HTTP Async ERROR] Không nạp được copas.http: %s", tostring(copas_http)))
+        return nil, "Không nạp được copas.http: " .. tostring(copas_http)
+    end
     local copas = require("copas")
     local sink = {}
     if body then
@@ -432,7 +473,7 @@ function HttpClient:requestAsync(method, url, body, headers, opts)
     opts = opts or {}
     local req_timeout = opts.timeout or self.total_timeout
     
-    local max_retries = 3
+    local max_retries = tonumber(opts.max_retries) or 3
     local delay = 2
     local ok, result, code, response_headers, status
     local result_code, result_headers, result_status
@@ -488,9 +529,12 @@ function HttpClient:requestAsync(method, url, body, headers, opts)
         local err_msg = not ok and tostring(result) or tostring(code)
         Debug.write(string.format("[HTTP Async request fail] %s %s -> %s", method, url, err_msg))
         
-        Debug.write("[HTTP Async] Attempting curl fallback...")
-        local content, err, headers, num_code = curlFallback(method, url, request_headers)
-        if content then return content, err, headers, num_code end
+        -- curl chạy qua io.popen nên chặn cả vòng lặp Copas: bỏ qua khi no_curl
+        if not opts.no_curl then
+            Debug.write("[HTTP Async] Attempting curl fallback...")
+            local content, err, headers, num_code = curlFallback(method, url, request_headers)
+            if content then return content, err, headers, num_code end
+        end
         
         if not ok then
             return nil, err_msg
@@ -510,16 +554,18 @@ function HttpClient:requestAsync(method, url, body, headers, opts)
     response_headers = result_headers
     code = result_code or result_status
     status = result_status
-    Debug.write(string.format("[HTTP Async request respond] %s %s -> result: %s, code: %s, numeric_code: %s", method, url, tostring(result), tostring(code), tostring(numeric_code)))
+    Debug.verbose(string.format("[HTTP Async request respond] %s %s -> result: %s, code: %s, numeric_code: %s", method, url, tostring(result), tostring(code), tostring(numeric_code)))
     if response_headers then
-        for k, v in pairs(response_headers) do
-            Debug.write(string.format("  Resp Header: %s: %s", k, tostring(v)))
+        if Debug.isVerbose() then
+            for k, v in pairs(response_headers) do
+                Debug.write(string.format("  Resp Header: %s: %s", k, tostring(v)))
+            end
         end
     end
 
     if not numeric_code or numeric_code < 200 or numeric_code >= 300 then
         local error_body = table.concat(sink)
-        Debug.write(string.format("  Resp Error Body (len=%d): %s", #error_body, safeLogPreview(error_body, response_headers, 500)))
+        Debug.write(string.format("  Resp Error %s %s -> HTTP %s, body (len=%d): %s", method, url, tostring(numeric_code or code), #error_body, safeLogPreview(error_body, response_headers, 500)))
         
         local redirect = true
         if type(opts) == "table" and opts.redirect ~= nil then
@@ -543,20 +589,22 @@ function HttpClient:requestAsync(method, url, body, headers, opts)
                 return self:requestAsync(new_method, new_url, new_method == "GET" and nil or body, headers, new_opts)
             else
                 Debug.write("[HTTP Async ERROR] Too many redirects")
-                return nil, "Quá nhiều lần chuyển hướng"
+                return nil, "Quá nhiều lần chuyển hướng", response_headers, numeric_code, error_body
             end
         end
 
-        return nil, string.format("Máy chủ trả về HTTP %s", tostring(status or code))
+        -- Trả đủ headers/mã/body như HttpClient:request để nguồn xử lý giống nhau
+        -- dù request chạy đồng bộ hay được chuyển sang pool.
+        return nil, string.format("Máy chủ trả về HTTP %s", tostring(status or code)), response_headers, numeric_code, error_body
     end
     
     local content = table.concat(sink)
     if isCloudflare(content) then
         Debug.write("[HTTP Async ERROR] Cloudflare challenge detected in 200 OK response")
-        return nil, "Bị chặn bởi Cloudflare (Anti-Bot)"
+        return nil, "Bị chặn bởi Cloudflare (Anti-Bot)", response_headers, 403, content
     end
 
-    Debug.write(string.format("  Resp Body (len=%d): %s", #content, safeLogPreview(content, response_headers, 100)))
+    Debug.verbose(string.format("  Resp Body (len=%d): %s", #content, safeLogPreview(content, response_headers, 100)))
     return content, nil, response_headers, numeric_code
 end
 

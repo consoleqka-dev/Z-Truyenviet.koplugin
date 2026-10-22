@@ -7,7 +7,9 @@ local Source = {
     id = "metruyenchuvn",
     name = "Mê Truyện Chữ VN",
     kind = "text",
-    base_url = "https://metruyenchuvn.org",
+    -- Domain cũ metruyenchuvn.org chuyển hướng 301 sang domain mới. URL truyện đã lưu
+    -- với domain cũ vẫn tải được nhờ chuyển hướng; nguồn này không so khớp theo host.
+    base_url = "https://metruyenchu.com.vn",
 }
 
 local function normalizeHtml(raw_html)
@@ -29,6 +31,36 @@ local function isValidStoryPath(path)
         return false
     end
     return lower:find("^/[%w%-]+/?$") ~= nil
+end
+
+-- Mỗi truyện trong trang tìm kiếm/danh sách nằm trong `<div class="item">` với
+-- dòng "Số chương :" và biểu tượng `status-full` khi đã hoàn thành.
+local function parseItemMeta(html)
+    local meta = {}
+    for item in html:gmatch('<div class="item">(.-)</div>') do
+        local href = item:match('href="([^"]+)"')
+        if href then
+            local path = href:gsub("^https?://[^/]+", "")
+            local count = tonumber(item:match("Số chương :</span>%s*(%d+)"))
+            meta[path] = {
+                chapter_count = count and count > 0 and count or nil,
+                completed = item:find("status%-full") ~= nil,
+            }
+        end
+    end
+    return meta
+end
+
+local function applyItemMeta(stories, html)
+    local meta = parseItemMeta(html)
+    for _, story in ipairs(stories) do
+        local path = story.url:gsub("^https?://[^/]+", "")
+        local item = meta[path]
+        if item then
+            story.chapter_count = item.chapter_count
+            story.completed = item.completed
+        end
+    end
 end
 
 function Source:search(query)
@@ -67,7 +99,35 @@ function Source:search(query)
         end
     end
 
+    applyItemMeta(stories, html)
     return stories
+end
+
+-- Chương mới nhất cho kết quả tìm kiếm: thẻ trong trang tìm kiếm chỉ có tổng "Số chương", còn
+-- trang truyện có khối `<div class="new-chap">` liệt kê vài chương mới nhất ("Chương 235", ...).
+-- Thứ tự trong khối không đáng tin (từng gặp 1563..1560 rồi 1569) nên lấy số lớn nhất.
+-- Chương không có số (vd "Chương tiếp") bị bỏ qua. Đúng 1 request.
+local function parseLatestChapter(html)
+    local block = html:match('<div class="new%-chap">(.-)</div>')
+    if not block then return nil end
+    local best
+    for label in block:gmatch("<a[^>]*>([^<]*)</a>") do
+        local lower = label:lower()
+        local n = tonumber(lower:match("chương%s*(%d+%.?%d*)") or lower:match("chƯƠng%s*(%d+%.?%d*)")
+            or lower:match("chapter%s*(%d+%.?%d*)"))
+        if n and n > 0 and (not best or n > best) then best = n end
+    end
+    return best
+end
+
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, {
+        ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    })
+    if not html then return nil, err end
+    local latest = parseLatestChapter(normalizeHtml(html))
+    if not latest then return nil, "Không đọc được chương mới nhất" end
+    return { latest_chapter = latest }
 end
 
 function Source:getCompleted(page)
@@ -101,6 +161,7 @@ function Source:getCompleted(page)
         end
     end
 
+    applyItemMeta(stories, html)
     return {
         stories = stories,
         genres = {},
@@ -139,6 +200,7 @@ function Source:getHot(page)
         end
     end
 
+    applyItemMeta(stories, html)
     return {
         stories = stories,
         genres = {},
@@ -177,6 +239,7 @@ function Source:getUpdating(page)
         end
     end
 
+    applyItemMeta(stories, html)
     return {
         stories = stories,
         genres = self:getGenresList() or {},
@@ -228,7 +291,7 @@ function Source:getSections()
         { id = "hot", name = "🔥 Truyện Hot / Đề Cử" },
         { id = "completed", name = "✅ Truyện Hoàn Thành (Full)" },
         { id = "updating", name = "🆕 Truyện Đang Ra / Cập Nhật Mới" },
-        { id = "search", name = "🔍 Tìm Kiếm Trên Mê Truyện Chữ" },
+        { id = "search", name = "⌕ Tìm Kiếm Trên Mê Truyện Chữ" },
     }
 end
 
@@ -264,6 +327,7 @@ function Source:getGenre(genre, page)
         end
     end
 
+    applyItemMeta(stories, html)
     return {
         stories = stories,
         genres = {},

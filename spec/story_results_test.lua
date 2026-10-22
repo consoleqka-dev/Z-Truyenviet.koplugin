@@ -147,6 +147,38 @@ assertEqual(0, #view.list.items, "Clears final list item")
 assertEqual(1, view.list.show_page, "Keeps valid page when empty")
 assertEqual(3, dirty_count, "Repaints after each removal")
 
+-- Quay lại danh sách: đứng ở trang chứa truyện vừa mở.
+local focus_items = {}
+local focus_list_items = {}
+for index = 1, 7 do
+    local item = { story = { source_id = "s", url = "u" .. index } }
+    table.insert(focus_items, item)
+    table.insert(focus_list_items, item)
+end
+local focus_populates = 0
+local focus_view = {
+    story_items = focus_items,
+    list = {
+        items = focus_list_items,
+        items_per_page = 3,
+        show_page = 1,
+        _populateItems = function() focus_populates = focus_populates + 1 end,
+    },
+}
+assertEqual(true, StoryResults.showStoryPage(focus_view, { source_id = "s", url = "u5" }), "Finds focused story")
+assertEqual(2, focus_view.list.show_page, "Opens page of focused story")
+assertEqual(1, focus_populates, "Repopulates once for new page")
+assertEqual(true, StoryResults.showStoryPage(focus_view, focus_items[7].story), "Finds story on last page")
+assertEqual(3, focus_view.list.show_page, "Opens last page")
+assertEqual(false, StoryResults.showStoryPage(focus_view, { source_id = "s", url = "gone" }), "Missing story")
+assertEqual(3, focus_view.list.show_page, "Missing story keeps page")
+assertEqual(false, StoryResults.showStoryPage(focus_view, nil), "No focus story")
+assertEqual(false, StoryResults.showStoryPage({ story_items = {}, list = {} }, focus_items[1].story),
+    "Empty list has no items_per_page")
+focus_populates = 0
+StoryResults.showStoryPage(focus_view, focus_items[7].story)
+assertEqual(0, focus_populates, "Same page does not repopulate")
+
 local return_count = 0
 local close_view = {
     on_return_callback = function()
@@ -157,5 +189,98 @@ assertEqual(true, StoryResults.onClose(close_view), "Closes results")
 assertEqual(true, StoryResults.onClose(close_view), "Ignores duplicate close")
 assertEqual(1, close_count, "Closes widget once")
 assertEqual(1, return_count, "Runs return callback once")
+
+-- Dòng phụ của StoryItem: nguồn · số chương · Hoàn thành (+ sao yêu thích)
+local Storage = require("truyenviet/storage")
+Storage.isFavorite = function(_, story)
+    return story.favorite == true
+end
+local function sourceText(story)
+    return StoryResults.StoryItem.getSourceText({ story = story })
+end
+
+assertEqual(
+    "Nguồn A · 120 chương · Hoàn thành",
+    sourceText({ source_name = "Nguồn A", chapter_count = 120, completed = true }),
+    "Count and completed"
+)
+assertEqual(
+    "Nguồn A · 120 chương",
+    sourceText({ source_name = "Nguồn A", chapter_count = 120, completed = false }),
+    "Count only (ongoing)"
+)
+assertEqual(
+    "Nguồn A · 120 chương",
+    sourceText({ source_name = "Nguồn A", chapter_count = "120" }),
+    "Count given as numeric string"
+)
+assertEqual(
+    "Nguồn A · Hoàn thành",
+    sourceText({ source_name = "Nguồn A", completed = true }),
+    "Completed only"
+)
+assertEqual(
+    "Nguồn A",
+    sourceText({ source_name = "Nguồn A" }),
+    "Neither count nor completed"
+)
+assertEqual(
+    "Nguồn A",
+    sourceText({ source_name = "Nguồn A", chapter_count = 0 }),
+    "Zero count is not shown"
+)
+assertEqual(
+    "truyenqq · 8 chương · Hoàn thành  ★",
+    sourceText({ source_id = "truyenqq", chapter_count = 8, completed = true, favorite = true }),
+    "Favorite marker stays last and source_id is the fallback name"
+)
+assertEqual(
+    "Nguồn A · Chương 170 · Hoàn thành",
+    sourceText({ source_name = "Nguồn A", latest_chapter = 170, chapter_count = 165, completed = true }),
+    "Latest chapter wins over total count"
+)
+assertEqual(
+    "Nguồn A · Chương 12.5",
+    sourceText({ source_name = "Nguồn A", latest_chapter = "12.5" }),
+    "Decimal latest chapter is kept"
+)
+assertEqual(
+    "Nguồn A · 120 chương",
+    sourceText({ source_name = "Nguồn A", latest_chapter = 0, chapter_count = 120 }),
+    "Invalid latest chapter falls back to count"
+)
+
+-- Tủ truyện: số chương đã tải trên tổng số, không có dấu sao
+assertEqual(
+    "truyenqq · Chương 83 · Hoàn thành · Đã tải 78/83",
+    sourceText({ source_id = "truyenqq", latest_chapter = 83, completed = true,
+        offline_count = 78, favorite = true }),
+    "Downloaded over latest chapter"
+)
+assertEqual(
+    "Nguồn A · Chương 125 · Đã tải 5/120",
+    sourceText({ source_name = "Nguồn A", chapter_count = 120, latest_chapter = 125, offline_count = 5 }),
+    "Exact count is the total when known"
+)
+assertEqual(
+    "zettruyen · Chương 12 · Chưa tải",
+    sourceText({ source_id = "zettruyen", latest_chapter = 12, offline_count = 0 }),
+    "Nothing downloaded"
+)
+assertEqual(
+    "Nguồn A · Đã tải 6 chương",
+    sourceText({ source_name = "Nguồn A", offline_count = 6 }),
+    "Unknown total"
+)
+assertEqual(
+    "Trên máy · 10 tập",
+    sourceText({ source_id = "local", kind = "local", local_type = "dir", offline_count = 10 }),
+    "Local folder"
+)
+assertEqual(
+    "Trên máy · PDF",
+    sourceText({ source_id = "local", kind = "local", local_type = "pdf" }),
+    "Local single file"
+)
 
 print(string.format("Story results tests passed: %d assertions", tests_run))

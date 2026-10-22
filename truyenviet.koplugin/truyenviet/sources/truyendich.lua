@@ -6,13 +6,23 @@ local Source = {
     id = "truyendich",
     name = "Truyendich",
     kind = "text",
-    base_url = "https://truyendich.ai",
+    -- .ai/.fit bị chặn TLS từ VN; .space là bản sao cùng ứng dụng.
+    base_url = "https://truyendich.space",
     max_concurrent = 2,
 }
 
+-- URL đã lưu (yêu thích, lịch sử) từ tên miền cũ -> tên miền hiện tại.
+local function currentUrl(url)
+    if type(url) ~= "string" then
+        return url
+    end
+    return (url:gsub("^https?://truyendich%.ai", Source.base_url)
+        :gsub("^https?://truyendich%.fit", Source.base_url))
+end
+
 local function requestHeaders(referer)
     return {
-        ["Referer"] = referer or "https://truyendich.ai/",
+        ["Referer"] = currentUrl(referer) or (Source.base_url .. "/"),
     }
 end
 
@@ -53,13 +63,54 @@ function Source:parseSearch(html)
     return Util.uniqueBy(stories, "url")
 end
 
+-- Trang tìm kiếm HTML do client render nên không có link truyện; dùng API JSON:
+-- {items=[{slug,title,image_url,author,status,latest_chapter_number}]}.
+-- status: completed -> true, ongoing/pending -> false, khác -> nil.
+function Source:parseSearchJson(data)
+    local stories = {}
+    local items = type(data) == "table" and data.items
+    if type(items) ~= "table" then
+        return stories
+    end
+    for _, item in ipairs(items) do
+        if type(item) == "table" and type(item.slug) == "string" and item.slug ~= ""
+                and type(item.title) == "string" and item.title ~= "" then
+            local cover = type(item.image_url) == "string" and item.image_url or nil
+            if cover and cover:sub(1, 1) == "/" and cover:sub(2, 2) ~= "/" then
+                cover = self.base_url .. cover
+            end
+            local latest = tonumber(item.latest_chapter_number)
+            local completed
+            if item.status == "completed" then
+                completed = true
+            elseif item.status == "ongoing" or item.status == "pending" then
+                completed = false
+            end
+            table.insert(stories, {
+                source_id = self.id,
+                title = Util.decodeHtml(item.title),
+                url = self.base_url .. "/doc-truyen/" .. item.slug,
+                cover_url = Util.absoluteUrl(self.base_url, cover),
+                latest_chapter = latest and latest > 0 and latest or nil,
+                completed = completed,
+                kind = self.kind,
+            })
+        end
+    end
+    return Util.uniqueBy(stories, "url")
+end
+
 function Source:search(query)
-    local encoded = ko_util.urlEncode(query):gsub("%%20", "+")
-    local html, err = Http:get(self.base_url .. "/tim-kiem?keyword=" .. encoded, requestHeaders())
-    if not html then
+    local url = self.base_url .. "/api/novels/search?q=" .. ko_util.urlEncode(query)
+    local body, err = Http:getJson(url, requestHeaders(self.base_url .. "/"))
+    if not body then
         return nil, err
     end
-    return self:parseSearch(html)
+    local data = Util.parseJson(body)
+    if type(data) ~= "table" then
+        return nil, "Phản hồi tìm kiếm không hợp lệ"
+    end
+    return self:parseSearchJson(data)
 end
 
 function Source:parseListing(html, page)
@@ -109,13 +160,16 @@ function Source:parseStoryDetails(html)
     return {
         description = Util.stripTags(description_html) ~= "" and Util.stripTags(description_html) or Util.getMetaContent(html, "name", "description"),
         author = Util.stripTags(author),
-        status = Util.stripTags(html:match('Trạng thái:.-<span[^>]*>([%s%S]-)</span>')),
+        status = Util.stripTags(
+            html:match('Trạng thái</span></div><p[^>]*>([^<]+)')
+                or html:match('Trạng thái:.-<span[^>]*>([%s%S]-)</span>')
+        ),
         genres = Util.parseGenreNames(html),
     }
 end
 
 function Source:getStoryDetails(story)
-    local html, err = Http:get(story.url, requestHeaders())
+    local html, err = Http:get(currentUrl(story.url), requestHeaders())
     if not html then
         return nil, err
     end
@@ -162,7 +216,7 @@ end
 
 function Source:getStoryPage(story, page)
     page = page or 1
-    local page_url = story.url:gsub("/trang%-%d+", ""):gsub("%?.*$", "")
+    local page_url = currentUrl(story.url):gsub("/trang%-%d+", ""):gsub("%?.*$", "")
     if page > 1 then
         page_url = page_url .. "/trang-" .. page
     end
@@ -206,7 +260,7 @@ function Source:parseChapter(html, chapter)
 end
 
 function Source:getChapter(chapter)
-    local html, err = Http:get(chapter.url, requestHeaders(chapter.story_url or chapter.url))
+    local html, err = Http:get(currentUrl(chapter.url), requestHeaders(chapter.story_url or chapter.url))
     if not html then
         return nil, err
     end
@@ -214,7 +268,7 @@ function Source:getChapter(chapter)
 end
 
 function Source:getChapterAsync(chapter)
-    local html, err = Http:requestAsync("GET", chapter.url, nil, requestHeaders(chapter.story_url or chapter.url))
+    local html, err = Http:requestAsync("GET", currentUrl(chapter.url), nil, requestHeaders(chapter.story_url or chapter.url))
     if not html then
         return nil, err
     end

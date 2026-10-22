@@ -13,11 +13,9 @@ local TruyenViet = WidgetContainer:extend{
     VERSION = Version,
 }
 
--- ZenOS and KOReader standard launch methods
-function TruyenViet:onShow()
-    Browser:showRoot()
-end
-
+-- ZenOS launch methods. Do not define onShow/onOpen: KOReader broadcasts
+-- Show/Open events to plugin modules, which would reopen the browser over
+-- a freshly opened chapter.
 function TruyenViet:show()
     Browser:showRoot()
 end
@@ -27,10 +25,6 @@ function TruyenViet:open()
 end
 
 function TruyenViet:launch()
-    Browser:showRoot()
-end
-
-function TruyenViet:onOpen()
     Browser:showRoot()
 end
 
@@ -71,18 +65,41 @@ function TruyenViet:init()
     end)
 
     self:onDispatcherRegisterActions()
+    self:openOnStart()
 
     local Updater = require("truyenviet/updater")
     Updater:scheduleBackgroundCheck()
 end
 
+-- Mỗi lần KOReader khởi động chỉ mở một lần, ở plugin được nạp đầu tiên.
+-- Không dựa vào profile "on KOReader start": khi KOReader khởi động vào màn
+-- Lịch sử, sự kiện của profile chỉ tới màn Lịch sử và bị bỏ qua.
+local start_checked = false
+
+function TruyenViet:openOnStart()
+    if start_checked then
+        return
+    end
+    start_checked = true
+    local Storage = require("truyenviet/storage")
+    if not Storage:isOpenOnStartEnabled() then
+        return
+    end
+    -- nextTick chạy sau khi KOReader đã mở Lịch sử / Yêu thích nên Truyện Việt nằm trên cùng.
+    require("ui/uimanager"):nextTick(function()
+        Browser:showRoot()
+    end)
+end
+
 function TruyenViet:onDispatcherRegisterActions()
+    -- KOReader's Dispatcher treats `reader = true` as reader-only and skips the
+    -- action in the file browser and History, so gestures and profiles bound
+    -- to it do nothing there. Only chapter actions keep the flag.
     Dispatcher:registerAction("start_truyenviet", {
         category = "none",
         event = "StartTruyenViet",
         title = "Truyện Việt",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -90,7 +107,7 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_chapter_list", {
         category = "none",
         event = "TruyenVietBackToChapters",
-        title = "📋 Truyện Việt: Danh sách chương",
+        title = "☰ Truyện Việt: Danh sách chương",
         general = true,
         reader = true,
         filemanager = true,
@@ -100,9 +117,8 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_continue", {
         category = "none",
         event = "TruyenVietContinue",
-        title = "📖 Truyện Việt: Tiếp tục đọc",
+        title = "▶ Truyện Việt: Tiếp tục đọc",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -110,9 +126,8 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_history", {
         category = "none",
         event = "TruyenVietHistory",
-        title = "📜 Truyện Việt: Lịch sử đọc",
+        title = "⟲ Truyện Việt: Lịch sử đọc",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -120,9 +135,8 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_downloaded", {
         category = "none",
         event = "TruyenVietDownloaded",
-        title = "💾 Truyện Việt: Đã tải xuống",
+        title = "⤓ Truyện Việt: Đã tải xuống",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -130,7 +144,7 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_next_chapter", {
         category = "none",
         event = "TruyenVietNextChapter",
-        title = "➡️ Truyện Việt: Chương tiếp",
+        title = "➡ Truyện Việt: Chương tiếp",
         general = true,
         reader = true,
         filemanager = true,
@@ -140,7 +154,7 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_prev_chapter", {
         category = "none",
         event = "TruyenVietPrevChapter",
-        title = "⬅️ Truyện Việt: Chương trước",
+        title = "⬅ Truyện Việt: Chương trước",
         general = true,
         reader = true,
         filemanager = true,
@@ -150,7 +164,7 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_story_page", {
         category = "none",
         event = "TruyenVietStoryPage",
-        title = "🏠 Truyện Việt: Về nguồn",
+        title = "⌂ Truyện Việt: Về nguồn",
         general = true,
         reader = true,
         filemanager = true,
@@ -160,9 +174,8 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_gdrive_download", {
         category = "none",
         event = "TruyenVietGDriveDownload",
-        title = "☁️ Truyện Việt: Tải từ Google Drive",
+        title = "☁ Truyện Việt: Tải từ Google Drive",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -170,9 +183,8 @@ function TruyenViet:onDispatcherRegisterActions()
     Dispatcher:registerAction("truyenviet_check_update", {
         category = "none",
         event = "TruyenVietCheckUpdate",
-        title = "🔄 Truyện Việt: Kiểm tra cập nhật OTA",
+        title = "↻ Truyện Việt: Kiểm tra cập nhật OTA",
         general = true,
-        reader = true,
         filemanager = true,
         plugin = true,
     })
@@ -189,57 +201,67 @@ function TruyenViet:addToMainMenu(menu_items)
             end,
         },
         {
-            text = "📖 Tiếp tục đọc",
+            text = "▶ Tiếp tục đọc",
             callback = function()
                 self:onTruyenVietContinue()
             end,
         },
         {
-            text = "📋 Danh sách chương",
+            text = "☰ Danh sách chương",
             callback = function()
                 self:onTruyenVietBackToChapters()
             end,
         },
         {
-            text = "➡️ Chương tiếp",
+            text = "➡ Chương tiếp",
             callback = function()
                 self:onTruyenVietNextChapter()
             end,
         },
         {
-            text = "⬅️ Chương trước",
+            text = "⬅ Chương trước",
             callback = function()
                 self:onTruyenVietPrevChapter()
             end,
         },
         {
-            text = "🏠 Về nguồn truyện",
+            text = "⌂ Về nguồn truyện",
             callback = function()
                 self:onTruyenVietStoryPage()
             end,
         },
         {
-            text = "📜 Lịch sử đọc",
+            text = "⟲ Lịch sử đọc",
             callback = function()
                 self:onTruyenVietHistory()
             end,
         },
         {
-            text = "💾 Đã tải xuống",
+            text = "⤓ Đã tải xuống",
             callback = function()
                 self:onTruyenVietDownloaded()
             end,
         },
         {
-            text = "☁️ Tải từ Google Drive",
+            text = "☁ Tải từ Google Drive",
             callback = function()
                 self:onTruyenVietGDriveDownload()
             end,
         },
         {
-            text = "🔄 Kiểm tra cập nhật OTA",
+            text = "↻ Kiểm tra cập nhật OTA",
             callback = function()
                 self:onTruyenVietCheckUpdate()
+            end,
+        },
+        {
+            text = "Mở Truyện Việt khi khởi động KOReader",
+            checked_func = function()
+                return require("truyenviet/storage"):isOpenOnStartEnabled()
+            end,
+            callback = function()
+                local Storage = require("truyenviet/storage")
+                Storage:setOpenOnStartEnabled(not Storage:isOpenOnStartEnabled())
             end,
         },
     }
@@ -282,6 +304,21 @@ function TruyenViet:addToMainMenu(menu_items)
     end
 end
 
+-- Mở file thuộc mục "Trên máy" (từ Tủ truyện, File manager, lịch sử
+-- KOReader...) thì ghi vào Lịch sử đọc. Không trả về true để sự kiện
+-- ReaderReady vẫn tới các module khác.
+function TruyenViet:onReaderReady()
+    local document = self.ui and self.ui.document
+    local file = document and document.file
+    if type(file) == "string" then
+        local LocalLibrary = require("truyenviet/local_library")
+        local ok, err = pcall(LocalLibrary.recordRead, file)
+        if not ok then
+            require("truyenviet/debugger").write("[Lịch sử] Không ghi được: " .. tostring(err))
+        end
+    end
+end
+
 function TruyenViet:onStartTruyenViet()
     Browser:showRoot()
 end
@@ -293,40 +330,37 @@ function TruyenViet:onTruyenVietBackToChapters()
         Reader:returnToPlugin()
     else
         local Storage = require("truyenviet/storage")
-        local SourceRegistry = require("truyenviet/source_registry")
+        local LocalLibrary = require("truyenviet/local_library")
         local history = Storage:getHistory()
-        if #history > 0 then
-            local latest = history[1]
-            local src = SourceRegistry:get(latest.story.source_id)
-            if src then
-                Browser:loadStoryPage(latest.story, src, 1, function()
-                    Browser:showRoot()
-                end)
-            else
-                Browser:showHistory(function() Browser:showRoot() end)
-            end
-        else
+        local latest = history[1]
+        if not latest then
             Browser:showRoot()
+            return
+        end
+        local function back()
+            Browser:showRoot()
+        end
+        -- Mục "Trên máy": danh sách tập trong thư mục thay cho mục lục.
+        if LocalLibrary.isLocal(latest.story) and LocalLibrary.entryType(latest.story.url) == "dir" then
+            Browser:openLocalEntry(latest.story, nil, back)
+        elseif not Browser:openHistoryItem(latest, back) then
+            Browser:showHistory(back)
         end
     end
 end
 
 function TruyenViet:onTruyenVietContinue()
     local Storage = require("truyenviet/storage")
-    local SourceRegistry = require("truyenviet/source_registry")
-    local history = Storage:getHistory()
-    if #history > 0 then
-        local latest = history[1]
-        local src = SourceRegistry:get(latest.story.source_id)
-        if src then
-            Browser:loadStoryPage(latest.story, src, 1, function()
-                Browser:showRoot()
-            end)
-        else
-            Browser:showHistory(function() Browser:showRoot() end)
-        end
-    else
+    local latest = Storage:getHistory()[1]
+    if not latest then
         Browser:showRoot()
+        return
+    end
+    local function back()
+        Browser:showRoot()
+    end
+    if not Browser:openHistoryItem(latest, back) then
+        Browser:showHistory(back)
     end
 end
 

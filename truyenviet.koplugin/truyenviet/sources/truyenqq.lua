@@ -1,12 +1,11 @@
 local Http = require("truyenviet/http_client")
 local Util = require("truyenviet/helpers")
-local Debug = require("truyenviet/debugger")
 
 local Source = {
     id = "truyenqq",
     name = "TruyenQQ",
     kind = "comic",
-    base_url = "https://truyenqqko.com",
+    base_url = "https://truyenqq.com.vn",
     reversed_chapters = true,
 }
 
@@ -18,9 +17,15 @@ local Source = {
 -- so với truy cập trang bình thường. Tách riêng: pageHeaders() cho tải trang
 -- HTML thường (không có X-Requested-With), ajaxHeaders() chỉ dùng cho đúng 1
 -- endpoint AJAX thật là /frontend/search/search.
-local function pageHeaders()
+-- Truyện lưu từ tên miền cũ (vd. truyenqqko.com) vẫn phải tải từ đúng tên miền đó:
+-- link chương trên trang là đường dẫn tương đối, và CDN ảnh từ chối Referer khác tên miền.
+local function siteOf(url)
+    return tostring(url or ""):match("^(https?://[^/]+)") or Source.base_url
+end
+
+local function pageHeaders(site)
     return {
-        ["Referer"] = Source.base_url .. "/",
+        ["Referer"] = (site or Source.base_url) .. "/",
         ["Accept-Language"] = "vi-VN,vi;q=0.9,en;q=0.7",
     }
 end
@@ -66,17 +71,147 @@ function Source:parseSearch(html)
     return Util.uniqueBy(stories, "url")
 end
 
+-- Giao diện truyenqq.com.vn: kết quả tìm kiếm là trang HTML /tim-kiem?s=...
+-- với mỗi truyện là <div class="item"> chứa <h3><a href title> và dòng
+-- "Số chương: N" nằm sau </h3>, nên cắt từng mục theo mốc <div class="item"> kế tiếp.
+function Source:parseSearchPage(html)
+    local stories = {}
+    local listing_start = html:find('class="listing"', 1, true)
+    if not listing_start then
+        return stories
+    end
+    local listing = html:sub(listing_start)
+    local marker = '<div class="item">'
+    local position = listing:find(marker, 1, true)
+    while position do
+        local next_position = listing:find(marker, position + #marker, true)
+        local item_html = listing:sub(
+            position + #marker,
+            (next_position or (#listing + 1)) - 1
+        )
+        local heading = item_html:match("<h3[^>]*>([%s%S]-)</h3>")
+        local anchor_attrs, title_html = (heading or ""):match("<a([^>]*)>([%s%S]-)</a>")
+        local href = Util.getAttribute(anchor_attrs, "href")
+        local title = Util.stripTags(title_html)
+        local chapter_count = item_html:match("Số chương</span>%s*:%s*([%d%.,]+)")
+        if href and title ~= "" then
+            table.insert(stories, {
+                source_id = self.id,
+                title = title,
+                url = Util.absoluteUrl(self.base_url, href),
+                cover_url = Util.absoluteUrl(
+                    self.base_url,
+                    Util.getAttribute(item_html:match("(<img[^>]*>)"), "src")
+                ),
+                chapter_count = chapter_count
+                    and tonumber((chapter_count:gsub("[%.,]", ""))),
+                kind = self.kind,
+            })
+        end
+        position = next_position
+    end
+    return Util.uniqueBy(stories, "url")
+end
+
+-- Trang tìm kiếm không ghi trạng thái; chỉ trang chi tiết truyện mới có nhãn
+-- <span class="label-status label-full">Hoàn thành</span> (hoặc label-updating
+-- khi đang ra). Core gọi fetchSearchMeta (chạy async trong pool, có cache theo URL).
+function Source:parseCompleted(html)
+    if html:find("label%-status label%-full") then
+        return true
+    end
+    if html:find("label%-status label%-updating") then
+        return false
+    end
+    return nil
+end
+
+-- Số chương từ nhãn "Chapter 16", "Chapter 12.5", "Chương 3"; nil nếu nhãn không có số
+-- (vd. "Extra") hoặc số <= 0.
+local function chapterNumberFromLabel(label)
+    local text = Util.stripTags(label)
+    for _, prefix in ipairs({ "Chapter", "Chương", "Chap" }) do
+        local number = text:match("^%s*" .. prefix .. "%s*(%d+%.%d+)")
+            or text:match("^%s*" .. prefix .. "%s*(%d+)")
+        number = tonumber(number)
+        if number and number > 0 then
+            return number
+        end
+    end
+    return nil
+end
+
+-- Chương mới nhất của trang chi tiết: trang 1 của #chapter-list liệt kê 100 chương
+-- mới nhất (mới -> cũ) dạng <a class="chapter-name ...">Chapter N</a>. Lấy số lớn nhất
+-- thay vì mục đầu để không phụ thuộc thứ tự; dự phòng bằng mô tả meta
+-- "...trải nghiệm đọc chương N tại TruyenQQ".
+function Source:parseLatestChapter(html)
+    local list_start = html:find('id="chapter-list"', 1, true)
+    local latest
+    if list_start then
+        for attrs, inner in html:sub(list_start):gmatch("<a([^>]*)>([%s%S]-)</a>") do
+            local class_name = Util.getAttribute(attrs, "class") or ""
+            if class_name:find("chapter-name", 1, true) then
+                local number = chapterNumberFromLabel(inner)
+                if number and (not latest or number > latest) then
+                    latest = number
+                end
+            end
+        end
+    end
+    if latest then
+        return latest
+    end
+    local description = Util.getMetaContent(html, "name", "description") or ""
+    local number = tonumber(description:match("đọc chương%s+(%d+)"))
+    if number and number > 0 then
+        return number
+    end
+    return nil
+end
+
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(
+        story.url,
+        requestHeaders(siteOf(story.url)),
+        { force_luasec = true }
+    )
+    if not html then
+        return nil, err
+    end
+    local completed = self:parseCompleted(html)
+    local latest_chapter = self:parseLatestChapter(html)
+    if completed == nil and latest_chapter == nil then
+        return nil, "Không đọc được trạng thái"
+    end
+    return { completed = completed, latest_chapter = latest_chapter }
+end
+
 function Source:search(query)
+    local stories
     local html, err = Http:postForm(
         self.base_url .. "/frontend/search/search",
         { search = query, type = 0 },
         ajaxHeaders(),
         { force_luasec = true }
     )
-    if not html then
-        return nil, err
+    if html then
+        stories = self:parseSearch(html)
     end
-    return self:parseSearch(html)
+
+    if not stories or #stories == 0 then
+        local page_html, page_err = Http:get(
+            self.base_url .. "/tim-kiem?s=" .. Util.urlEncode(query),
+            requestHeaders(),
+            { force_luasec = true }
+        )
+        if not page_html then
+            return nil, page_err or err
+        end
+        stories = self:parseSearchPage(page_html)
+    end
+
+    return stories
 end
 
 function Source:parseListing(html, page)
@@ -187,7 +322,7 @@ function Source:parseStoryDetails(html)
 end
 
 function Source:getStoryDetails(story)
-    local html, err = Http:get(story.url, requestHeaders(), { force_luasec = true })
+    local html, err = Http:get(story.url, requestHeaders(siteOf(story.url)), { force_luasec = true })
     if not html then
         return nil, err
     end
@@ -198,12 +333,13 @@ function Source:parseStoryPage(html, story)
     local chapters = {}
     local slug = story.url:match("([^/]+)$") or ""
     local base_slug = slug:match("^(.-)%-%d+%.html$") or slug:match("^(.-)%.html$") or slug
+    local site = siteOf(story.url)
 
     -- Parse chapter links from works-chapter-item divs (preferred structure)
     for item_html in html:gmatch('<div[^>]-class="[^"]*works%-chapter%-item[^"]*"[^>]*>([%s%S]-)</div>%s*</div>') do
         for anchor_attrs, anchor_html in item_html:gmatch("<a([^>]*)>([%s%S]-)</a>") do
             local href = Util.getAttribute(anchor_attrs, "href")
-            local chapter_url = Util.absoluteUrl(self.base_url, href)
+            local chapter_url = Util.absoluteUrl(site, href)
             if chapter_url and chapter_url:find(base_slug, 1, true) then
                 local lurl = (chapter_url or ""):lower()
                 if lurl:find("%-chap%-") or lurl:find("chapter") or lurl:find("chuong") then
@@ -225,7 +361,7 @@ function Source:parseStoryPage(html, story)
             or html
         for anchor_attrs, anchor_html in list_html:gmatch("<a([^>]*)>([%s%S]-)</a>") do
             local href = Util.getAttribute(anchor_attrs, "href")
-            local chapter_url = Util.absoluteUrl(self.base_url, href)
+            local chapter_url = Util.absoluteUrl(site, href)
             if chapter_url and chapter_url:find(base_slug, 1, true) then
                 local lurl = (chapter_url or ""):lower()
                 if lurl:find("%-chap%-") or lurl:find("chapter") or lurl:find("chuong") then
@@ -251,7 +387,7 @@ function Source:parseStoryPage(html, story)
 end
 
 function Source:getStoryPage(story)
-    local html, err = Http:get(story.url, requestHeaders(), { force_luasec = true })
+    local html, err = Http:get(story.url, requestHeaders(siteOf(story.url)), { force_luasec = true })
     if not html then
         return nil, err
     end
@@ -259,6 +395,7 @@ function Source:getStoryPage(story)
 end
 
 function Source:parseChapter(html, chapter)
+    local site = siteOf(chapter.url)
     local images = {}
     local position = 1
 
@@ -292,7 +429,7 @@ function Source:parseChapter(html, chapter)
                         Util.getAttribute(image_tag, "data-fb"),
                     }
                     for index = 1, 3 do
-                        local url = Util.absoluteUrl(self.base_url, candidates[index])
+                        local url = Util.absoluteUrl(site, candidates[index])
                         if url and not seen[url] then
                             seen[url] = true
                             table.insert(clean_urls, url)
@@ -300,6 +437,20 @@ function Source:parseChapter(html, chapter)
                     end
                     table.insert(images, { urls = clean_urls })
                 end
+            end
+        end
+    end
+
+    -- Giao diện truyenqq.com.vn: ảnh nằm trong <div class="reading-content">,
+    -- tải lười qua thuộc tính data-src (src chỉ là ảnh giữ chỗ), không có
+    -- khối page-chapter. CDN ảnh yêu cầu Referer nên giữ nguyên referer bên dưới.
+    if #images == 0 then
+        local content_start = html:find('class="reading-content"', 1, true)
+        local content_html = content_start and html:sub(content_start) or ""
+        for image_tag in content_html:gmatch("(<img[^>]*>)") do
+            local url = Util.absoluteUrl(site, Util.getAttribute(image_tag, "data-src"))
+            if url then
+                table.insert(images, { urls = { url } })
             end
         end
     end
@@ -321,13 +472,13 @@ function Source:parseChapter(html, chapter)
         title = title or chapter.title,
         images = images,
         url = chapter.url,
-        referer = self.base_url .. "/",
+        referer = site .. "/",
         kind = self.kind,
     }
 end
 
 function Source:getChapter(chapter)
-    local html, err = Http:get(chapter.url, requestHeaders(), { force_luasec = true })
+    local html, err = Http:get(chapter.url, requestHeaders(siteOf(chapter.url)), { force_luasec = true })
     if not html then
         return nil, err
     end

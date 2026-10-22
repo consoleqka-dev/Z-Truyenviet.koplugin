@@ -1,6 +1,5 @@
 local Http = require("truyenviet/http_client")
 local Util = require("truyenviet/helpers")
-local ko_util = require("util")
 
 local Source = {
     id = "conduongbachu",
@@ -16,6 +15,11 @@ local PAGE_SIZE = 50
 local REST_PAGE_SIZE = 100
 local MAX_REST_PAGES = 100
 
+-- Số chương theo từng bộ (id STORIES -> số bài), lấy từ header x-wp-total.
+local meta_chapter_counts = {}
+-- Số chương mới nhất (lớn nhất) theo từng bộ, lấy từ các bài đăng mới nhất.
+local meta_latest_chapters = {}
+
 local STORIES = {
     {
         id = "main",
@@ -24,6 +28,7 @@ local STORIES = {
         url = "https://conduongbachu.com/",
         slug = "chapter-truyen",
         all_posts_are_chapters = true,
+        completed = true,
         cover_url = "https://conduongbachu.com/wp-content/uploads/2024/12/20355-con-duong-ba-chu_cover_large.webp",
     },
     {
@@ -32,6 +37,7 @@ local STORIES = {
         title = "Ngoại Truyện: Bất Hủ Thần Chiến",
         url = "https://conduongbachu.com/ngoai-truyen/",
         slug = "ngoai-truyen",
+        completed = true,
         cover_url = "https://conduongbachu.com/wp-content/uploads/2025/04/conduongbachu-ngoai-truyen-268x400.jpg",
     },
     {
@@ -40,6 +46,7 @@ local STORIES = {
         title = "Ngoại Truyện: Vạn Đạo Thần Chủ",
         url = "https://conduongbachu.com/ngoai-truyen-van-dao-than-chu/",
         slug = "ngoai-truyen-van-dao-than-chu",
+        completed = true,
         cover_url = "https://conduongbachu.com/wp-content/uploads/2025/04/conduongbachu-ngoai-truyen-268x400.jpg",
     },
     {
@@ -48,6 +55,7 @@ local STORIES = {
         title = "Ngoại Truyện: Chúa Tể Chi Lộ",
         url = "https://conduongbachu.com/ngoai-truyen-chua-te-chi-lo/",
         slug = "ngoai-truyen-chua-te-chi-lo",
+        completed = false,
         cover_url = "https://conduongbachu.com/wp-content/uploads/2025/04/conduongbachu-ngoai-truyen-268x400.jpg",
     },
 }
@@ -305,6 +313,19 @@ local function completeChapterIndex(self, story)
     return chapters
 end
 
+local function buildStory(self, config)
+    return {
+        source_id = self.id,
+        title = config.title,
+        url = config.url,
+        cover_url = config.cover_url,
+        kind = self.kind,
+        completed = config.completed,
+        chapter_count = meta_chapter_counts[config.id],
+        latest_chapter = meta_latest_chapters[config.id],
+    }
+end
+
 function Source:parseSearch(html, query)
     local result = {}
     local query_lower = query and query:lower() or ""
@@ -318,35 +339,63 @@ function Source:parseSearch(html, query)
         end
 
         if matches then
-            table.insert(result, {
-                source_id = self.id,
-                title = config.title,
-                url = config.url,
-                cover_url = config.cover_url,
-                kind = self.kind,
-            })
+            table.insert(result, buildStory(self, config))
         end
     end
     return result
 end
 
+-- Danh sách bộ truyện cố định nên không cần gọi trang tìm kiếm của site.
 function Source:search(query)
-    local encoded = ko_util.urlEncode(query or "")
-    local html = Http:get(self.base_url .. "/?s=" .. encoded, stdHeaders(self.base_url))
-    return self:parseSearch(html or "", query)
+    return self:parseSearch(nil, query)
+end
+
+-- Một request nhẹ: 10 bài mới nhất (chỉ title+link). Tổng số bài nằm ở header
+-- x-wp-total; chương mới nhất là số lớn nhất trong 10 bài đó (không tin thứ tự
+-- ngày đăng, và bỏ bài không phải chương như "Bầu chọn ngoại truyện").
+function Source:fetchSearchMeta(story)
+    local config = detectStoryConfig(story)
+    local count = meta_chapter_counts[config.id]
+    local latest = meta_latest_chapters[config.id]
+    if not (count and latest) then
+        local api_url = self.base_url
+            .. "/wp-json/wp/v2/posts?categories=" .. config.cat_id
+            .. "&per_page=10&_fields=link,title&order=desc&orderby=date"
+        local raw, request_err, response_headers, status =
+            Http:get(api_url, stdHeaders(self.base_url))
+        if not raw or raw == "" then
+            return nil, tostring(request_err or "phản hồi rỗng")
+        end
+        if tonumber(status) and tonumber(status) >= 400 then
+            return nil, "HTTP " .. tostring(status)
+        end
+        count = tonumber(responseHeader(response_headers, "x-wp-total"))
+        if not count or count <= 0 then
+            return nil, "WordPress không trả tổng số bài"
+        end
+        local chapters = parseWpPosts(raw, self.base_url, self.id, config.url)
+        latest = nil
+        for _, chapter in ipairs(chapters or {}) do
+            if chapter.number and chapter.number > 0
+                    and (not latest or chapter.number > latest) then
+                latest = chapter.number
+            end
+        end
+        meta_chapter_counts[config.id] = count
+        meta_latest_chapters[config.id] = latest
+    end
+    return {
+        chapter_count = count,
+        latest_chapter = latest,
+        completed = config.completed,
+    }
 end
 
 function Source:getCompleted(page)
     page = page or 1
     local stories = {}
     for _, config in ipairs(STORIES) do
-        table.insert(stories, {
-            source_id = self.id,
-            title = config.title,
-            url = config.url,
-            cover_url = config.cover_url,
-            kind = self.kind,
-        })
+        table.insert(stories, buildStory(self, config))
     end
 
     return {

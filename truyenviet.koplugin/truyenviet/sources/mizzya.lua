@@ -26,6 +26,21 @@ local function mizzyaGet(url)
     return html, err
 end
 
+-- Ghi chú ngay sau link trong trang danh sách, ví dụ `<em> (chưa hoàn tất)</em>` hoặc
+-- chữ thường `(còn tiếp)`. Chỉ các ghi chú báo "đang ra" mới kết luận được completed = false;
+-- truyện không có ghi chú KHÔNG được coi là đã hoàn thành (chỉ 6/149 mục có ghi chú).
+local ONGOING_NOTES = { "chưa hoàn tất", "còn tiếp", "đang trong giai đoạn hoàn tất" }
+
+local function isOngoingNote(content, after_link_pos)
+    local seg = content:sub(after_link_pos, after_link_pos + 160)
+    seg = seg:match("^(.-)</p>") or seg
+    seg = seg:match("^(.-)<a[%s>]") or seg
+    for _, note in ipairs(ONGOING_NOTES) do
+        if seg:find(note, 1, true) then return true end
+    end
+    return false
+end
+
 function Source.getHome()
     local url = Source.base_url .. "/2007/05/15/list-truy%e1%bb%87n/"
     local html, err = mizzyaGet(url)
@@ -42,18 +57,20 @@ function Source.getHome()
         return nil, "Không tìm thấy danh sách truyện"
     end
 
-    for href, title in content:gmatch('<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>') do
+    for href, title, after_pos in content:gmatch('<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>()') do
         if href:find(Source.base_url, 1, true) and not title:find("<img") then
             title = Util.decodeHtml(title)
             title = Util.stripTags(title)
             if title ~= "" then
-                table.insert(items, {
+                local item = {
                     source_id = Source.id,
                     title = title,
                     url = href:gsub("#.*$", ""),
                     kind = Source.kind,
                     cover_url = "", -- Đã kiểm tra: trang list của Mizzya là text-only, không có ảnh bìa
-                })
+                }
+                if isOngoingNote(content, after_pos) then item.completed = false end
+                table.insert(items, item)
             end
         end
     end
@@ -174,6 +191,32 @@ function Source:getStoryPage(story, page)
         page = 1,
         total_pages = 1,
     }
+end
+
+-- Số chương lớn nhất trong tên các chương dạng "Chương 29: Trở về" / "Chương 12.5".
+-- Mục không đánh số ("Lời giới thiệu", "Đoạn kết") và dạng "Phần N"/"Hồi thứ ..." bị bỏ qua.
+local function maxChapterNumber(chapters)
+    local best
+    for _, chapter in ipairs(chapters or {}) do
+        local lower = (chapter.title or ""):lower()
+        local n = tonumber(lower:match("^%s*chương%s*(%d+%.?%d*)") or lower:match("^%s*chƯƠng%s*(%d+%.?%d*)")
+            or lower:match("^%s*chapter%s*(%d+%.?%d*)"))
+        if n and n > 0 and (not best or n > best) then best = n end
+    end
+    return best
+end
+
+-- Meta nhẹ cho kết quả tìm kiếm: đúng 1 request vào trang truyện, đếm số link chương
+-- bằng chính parser của getStoryPage (đây là số chương đọc được, không phải độ dài gốc)
+-- và lấy số lớn nhất trong tên chương làm chương mới nhất.
+-- Dùng bản sao nông của story để getStoryPage không ghi story.details vào kết quả tìm kiếm.
+-- Trạng thái hoàn thành đã được suy ra từ ghi chú ở trang danh sách nên không trả ở đây.
+function Source:fetchSearchMeta(story)
+    local page, err = self:getStoryPage({ url = story.url, title = story.title })
+    if not page then return nil, err end
+    local count = page.chapters and #page.chapters or 0
+    if count <= 0 then return nil, "Không đếm được số chương" end
+    return { chapter_count = count, latest_chapter = maxChapterNumber(page.chapters) }
 end
 
 local function parseChapter(html)

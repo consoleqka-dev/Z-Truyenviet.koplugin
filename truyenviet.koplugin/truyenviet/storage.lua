@@ -55,6 +55,40 @@ function Storage:initialize()
             self.disabled_sources[source_id] = true
         end
     end
+    self:applyDefaultDisabled()
+end
+
+-- Nguồn chết/bị chặn từ VN: tắt một lần duy nhất (làm chậm mọi lượt tìm vì
+-- phải chờ hết hạn). Người dùng bật lại thì giữ nguyên lựa chọn đó.
+local DEFAULT_DISABLED = { "dualeo" }
+
+function Storage:applyDefaultDisabled()
+    local applied = self.settings:readSetting("default_disabled_applied", {})
+    if type(applied) ~= "table" then
+        applied = {}
+    end
+    local changed = false
+    for _, source_id in ipairs(DEFAULT_DISABLED) do
+        if not applied[source_id] then
+            applied[source_id] = true
+            self.disabled_sources[source_id] = true
+            changed = true
+        end
+    end
+    if not changed then
+        return
+    end
+    local saved = {}
+    for id, disabled in pairs(self.disabled_sources) do
+        if disabled == true then
+            saved[id] = true
+        end
+    end
+    pcall(function()
+        self.settings:saveSetting("disabled_sources", saved)
+        self.settings:saveSetting("default_disabled_applied", applied)
+        self.settings:flush()
+    end)
 end
 
 function Storage:getRootDir()
@@ -65,6 +99,14 @@ end
 function Storage:getCoverCacheDir()
     self:initialize()
     local path = ffiutil.joinPath(self.cache_dir, "covers")
+    ko_util.makePath(path)
+    return path
+end
+
+-- Mục lục chương đã lưu (ChapterCache).
+function Storage:getChapterCacheDir()
+    self:initialize()
+    local path = ffiutil.joinPath(self.cache_dir, "chapters")
     ko_util.makePath(path)
     return path
 end
@@ -149,26 +191,183 @@ function Storage:setSourceEnabled(source_id, enabled)
     return true
 end
 
-function Storage:getStoryDir(source, story)
+-- Đuôi file truyện nhận khi đếm chương đã tải và quét thư viện trên máy.
+Storage.BOOK_EXTENSIONS = {
+    azw3 = true, cbr = true, cbz = true, djvu = true, epub = true, fb2 = true,
+    htm = true, html = true, mobi = true, pdf = true, txt = true, zip = true,
+}
+
+function Storage.isBookFile(name)
+    if type(name) ~= "string" or name:sub(1, 1) == "." then
+        return false
+    end
+    local lower = name:lower()
+    if lower:find("^cover%.") then
+        return false
+    end
+    local extension = lower:match("%.([%w]+)$")
+    return extension ~= nil and Storage.BOOK_EXTENSIONS[extension] == true
+end
+
+-- Số chương trong tên file, leaf URL hoặc tiêu đề: "chapter-83", "chap-12.5",
+-- "x-chap-12-5.cbz" (12.5, chỉ khi ở cuối tên), "Chương 7". nil nếu không có.
+function Storage.chapterNumber(name)
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+    local text = name:lower():gsub("%.%a[%w]*$", "")
+    for _, keyword in ipairs({ "chapter", "chương", "chuong", "chap" }) do
+        local prefix = keyword .. "[%s%-_%.:]*"
+        local whole, part = text:match(prefix .. "(%d+)%.(%d+)")
+        if not whole then
+            whole, part = text:match(prefix .. "(%d+)%-(%d+)$")
+        end
+        if whole then
+            return tonumber(whole .. "." .. part)
+        end
+        local number = tonumber(text:match(prefix .. "(%d+)"))
+        if number then
+            return number
+        end
+    end
+    return nil
+end
+
+-- Thư mục plugin tải truyện về (không tạo thư mục).
+function Storage:getDownloadDir(source_id, url)
     self:initialize()
-    local source_dir = ffiutil.joinPath(self.root_dir, source.id)
-    local story_dir = ffiutil.joinPath(source_dir, Util.urlLeaf(story.url, "story"))
+    return ffiutil.joinPath(
+        ffiutil.joinPath(self.root_dir, source_id),
+        Util.urlLeaf(url, "story")
+    )
+end
+
+-- Thư mục trên máy (vd. /sdcard/Books/Manga/...) đã gắn vào truyện online.
+-- Story mở từ tìm kiếm/lịch sử không mang offline_dir nên tra Tủ truyện.
+function Storage:getLinkedDir(story)
+    if type(story) ~= "table" or not story.source_id or not story.url then
+        return nil
+    end
+    local dir = story.offline_dir
+    if type(dir) ~= "string" then
+        local record = self:getFavorites()[story.source_id .. "|" .. story.url]
+        dir = type(record) == "table" and record.offline_dir or nil
+    end
+    if type(dir) == "string" and dir ~= "" and lfs.attributes(dir, "mode") == "directory" then
+        return dir
+    end
+    return nil
+end
+
+function Storage:getStoryDir(source, story)
+    local linked = self:getLinkedDir(story)
+    if linked then
+        return linked
+    end
+    local story_dir = self:getDownloadDir(source.id, story.url)
     ko_util.makePath(story_dir)
     return story_dir
 end
 
-function Storage:getChapterPath(source, story, chapter)
+-- Danh sách file truyện của một thư mục, nhóm theo số chương. Cache theo thời
+-- điểm sửa thư mục nên thêm/xóa file là quét lại.
+local offline_index_cache = {}
+
+function Storage:getOfflineIndex(dir)
+    local modified = type(dir) == "string" and lfs.attributes(dir, "modification")
+    if not modified then
+        return nil
+    end
+    local cached = offline_index_cache[dir]
+    if cached and cached.modified == modified then
+        return cached
+    end
+    local names = {}
+    pcall(function()
+        for name in lfs.dir(dir) do
+            if Storage.isBookFile(name)
+                    and lfs.attributes(ffiutil.joinPath(dir, name), "mode") == "file" then
+                table.insert(names, name)
+            end
+        end
+    end)
+    table.sort(names, function(left, right)
+        return Util.naturalCompare(left, right)
+    end)
+    local index = { modified = modified, files = names, by_number = {} }
+    for _, name in ipairs(names) do
+        local number = Storage.chapterNumber(name)
+        if number and not index.by_number[number] then
+            index.by_number[number] = name
+        end
+    end
+    offline_index_cache[dir] = index
+    return index
+end
+
+-- Số chương khác nhau đã có file, gộp thư mục plugin và thư mục gắn ngoài.
+function Storage:countOfflineChapters(story)
+    local seen, count = {}, 0
+    local function add(dir)
+        local index = self:getOfflineIndex(dir)
+        for _, name in ipairs(index and index.files or {}) do
+            local number = Storage.chapterNumber(name)
+            local key = number and ("#" .. tostring(number)) or name
+            if not seen[key] then
+                seen[key] = true
+                count = count + 1
+            end
+        end
+    end
+    add(self:getDownloadDir(story.source_id, story.url))
+    add(self:getLinkedDir(story))
+    return count
+end
+
+local function chapterFileName(source, chapter)
     local extension = source.kind == "comic" and ".cbz" or ".html"
-    local filename = Util.urlLeaf(chapter.url, Util.safeName(chapter.title, "chapter"))
-    return ffiutil.joinPath(self:getStoryDir(source, story), filename .. extension)
+    return Util.urlLeaf(chapter.url, Util.safeName(chapter.title, "chapter")) .. extension
+end
+Storage.chapterFileName = chapterFileName
+
+-- Truyện có thư mục gắn ngoài: file plugin tự đặt tên -> file của người dùng
+-- cùng số chương -> file trong thư mục plugin -> tên plugin trong thư mục gắn
+-- ngoài (chương tải mới nằm chung thư mục).
+function Storage:getChapterPath(source, story, chapter)
+    local filename = chapterFileName(source, chapter)
+    local linked = self:getLinkedDir(story)
+    if not linked then
+        return ffiutil.joinPath(self:getStoryDir(source, story), filename)
+    end
+    local own_path = ffiutil.joinPath(linked, filename)
+    if lfs.attributes(own_path, "mode") == "file" then
+        return own_path
+    end
+    local number = Storage.chapterNumber(Util.urlLeaf(chapter.url, ""))
+        or Storage.chapterNumber(chapter.title)
+    local index = number and self:getOfflineIndex(linked)
+    if index and index.by_number[number] then
+        return ffiutil.joinPath(linked, index.by_number[number])
+    end
+    local plugin_path = ffiutil.joinPath(self:getDownloadDir(source.id, story.url), filename)
+    if lfs.attributes(plugin_path, "mode") == "file" then
+        return plugin_path
+    end
+    return own_path
 end
 
 function Storage:isDownloaded(source, story, chapter)
     return lfs.attributes(self:getChapterPath(source, story, chapter), "mode") == "file"
 end
 
+-- Chỉ xóa file do plugin tải; file của người dùng trong thư mục gắn ngoài
+-- (tên khác tên plugin đặt) không bao giờ bị xóa, kể cả khi tự dọn chương cũ.
 function Storage:removeDownload(source, story, chapter)
     local path = self:getChapterPath(source, story, chapter)
+    local filename = chapterFileName(source, chapter)
+    if path:sub(-(#filename + 1)) ~= "/" .. filename then
+        return true
+    end
     if lfs.attributes(path, "mode") == "file" then
         return os.remove(path)
     end
@@ -218,12 +417,76 @@ local function favoriteRecord(story)
         cover_url = story.cover_url,
         kind = story.kind,
         details = story.details,
+        offline_dir = story.offline_dir,
+        latest_chapter = story.latest_chapter,
+        chapter_count = story.chapter_count,
+        completed = story.completed,
+        meta_time = story.meta_time,
+        cover_source_id = story.cover_source_id,
+        cover_found = story.cover_found,
+        cover_time = story.cover_time,
     }
+end
+
+-- Trường chỉ Tủ truyện biết: story mở từ tìm kiếm/lịch sử không có nên giữ
+-- giá trị cũ thay vì xóa.
+local KEPT_FAVORITE_FIELDS = {
+    "offline_dir", "latest_chapter", "chapter_count", "completed", "meta_time",
+    "cover_source_id", "cover_found", "cover_time", "details",
+}
+
+-- So sánh sâu hai giá trị thuần (bảng so theo từng khóa).
+local function sameValue(left, right)
+    if left == right then
+        return true
+    end
+    if type(left) ~= "table" or type(right) ~= "table" then
+        return false
+    end
+    for key, value in pairs(left) do
+        if not sameValue(value, right[key]) then
+            return false
+        end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then
+            return false
+        end
+    end
+    return true
 end
 
 function Storage:addFavorite(story)
     local favorites = copyTable(self:getFavorites())
-    favorites[story.source_id .. "|" .. story.url] = favoriteRecord(story)
+    local key = story.source_id .. "|" .. story.url
+    local previous = favorites[key]
+    local record = favoriteRecord(story)
+    if type(previous) == "table" then
+        for _, field in ipairs(KEPT_FAVORITE_FIELDS) do
+            if record[field] == nil then
+                record[field] = previous[field]
+            end
+        end
+        -- Bìa lớn đã tìm được không bị thay bằng ảnh nhỏ của trang tìm kiếm
+        if previous.cover_found and not story.cover_found then
+            record.cover_url = previous.cover_url
+            record.cover_source_id = previous.cover_source_id
+        end
+    end
+    -- Mở lại truyện không đổi gì thì khỏi ghi lại cả file settings.
+    if sameValue(record, previous) then
+        return true
+    end
+    favorites[key] = record
+    return persistSetting(self, "favorites", favorites)
+end
+
+-- Ghi nhiều bản ghi Tủ truyện trong một lần flush. Chỉ thêm/cập nhật.
+function Storage:mergeFavorites(records)
+    local favorites = copyTable(self:getFavorites())
+    for _, record in ipairs(records or {}) do
+        favorites[record.source_id .. "|" .. record.url] = favoriteRecord(record)
+    end
     return persistSetting(self, "favorites", favorites)
 end
 
@@ -235,8 +498,15 @@ function Storage:updateFavorite(story)
 end
 
 function Storage:removeFavorite(story)
+    return self:removeFavorites({ story })
+end
+
+-- Xóa nhiều mục khỏi Tủ truyện trong một lần lưu.
+function Storage:removeFavorites(stories)
     local favorites = copyTable(self:getFavorites())
-    favorites[story.source_id .. "|" .. story.url] = nil
+    for _, story in ipairs(stories or {}) do
+        favorites[story.source_id .. "|" .. story.url] = nil
+    end
     return persistSetting(self, "favorites", favorites)
 end
 
@@ -280,7 +550,9 @@ function Storage:listFavorites()
                 and type(story.title) == "string"
                 and type(story.url) == "string"
                 and type(story.source_id) == "string" then
-            table.insert(result, story)
+            -- Bản sao: trường hiển thị gắn thêm (số chương đã tải, bìa) không
+            -- được lẫn vào bản ghi lưu trong settings.
+            table.insert(result, copyTable(story))
         end
     end
     table.sort(result, function(left, right)
@@ -425,6 +697,16 @@ end
 function Storage:setAutoPurgeEnabled(enabled)
     self:initialize()
     return persistSetting(self, "auto_purge_enabled", enabled == true)
+end
+
+function Storage:isOpenOnStartEnabled()
+    self:initialize()
+    return self.settings:readSetting("open_on_start", false) == true
+end
+
+function Storage:setOpenOnStartEnabled(enabled)
+    self:initialize()
+    return persistSetting(self, "open_on_start", enabled == true)
 end
 
 function Storage:getPurgeDistance()
@@ -724,8 +1006,8 @@ function Storage:mergeChapters(source, story, options)
         out_file:write("</body>\n</html>\n")
         out_file:close()
 
-        -- 4. Xóa file gốc nếu được bật
-        if delete_source_files then
+        -- 4. Xóa file gốc nếu được bật (không bao giờ xóa thư mục gắn ngoài)
+        if delete_source_files and not self:getLinkedDir(story) then
             pcall(function()
                 for f in lfs.dir(dir) do
                     if f ~= "." and f ~= ".." then

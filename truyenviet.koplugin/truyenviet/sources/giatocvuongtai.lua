@@ -33,12 +33,19 @@ local function formatStory(self, item)
     if cover and cover ~= "" then
         cover = "https://wsrv.nl/?w=300&output=jpeg&q=70&url=" .. cover:gsub("^https?://", "")
     end
+    -- API trả sẵn số chương và trạng thái; completed = nil nếu thiếu trường
+    local completed = nil
+    if type(item.completion_status) == "string" then
+        completed = item.completion_status == "completed"
+    end
     return {
         source_id = self.id,
         title = item.title,
         url = self.base_url .. "/story/" .. item.slug,
         cover_url = cover,
         kind = self.kind,
+        chapter_count = tonumber(item.chapter_count),
+        completed = completed,
         _slug = item.slug,
         _id = item.id
     }
@@ -58,6 +65,53 @@ function Source:search(query)
         table.insert(stories, formatStory(self, item))
     end
     return stories
+end
+
+-- Chương mới nhất của một truyện từ JSON chi tiết: các chương đã xuất bản được đánh số
+-- bằng order_number (0 = mục "Giới thiệu", không tính). Lấy số lớn nhất, không phụ thuộc
+-- thứ tự mảng.
+function Source:parseLatestChapter(item)
+    if type(item) ~= "table" or type(item.chapters) ~= "table" then
+        return nil
+    end
+    local latest
+    for _, chap in ipairs(item.chapters) do
+        local order = tonumber(chap.order_number)
+        if chap.is_published and order and order > 0 and (not latest or order > latest) then
+            latest = order
+        end
+    end
+    return latest
+end
+
+-- 1 request tới JSON chi tiết (danh sách chương nằm trong đó). Endpoint này đứng sau
+-- Cloudflare và chỉ cho qua request giống fetch cùng nguồn của trình duyệt
+-- (Sec-Fetch-*); thiếu các header này sẽ nhận 403 trang thử thách.
+function Source:fetchSearchMeta(story)
+    local slug = tostring(story.url or ""):match("/story/([^/]+)")
+    if not slug then return nil, "Invalid URL" end
+    if not json then return nil, "Thiếu thư viện JSON" end
+    local json_str, err = Http:get(self.api_url .. "/story/" .. slug .. ".json", {
+        ["Accept"] = "application/json",
+        ["Referer"] = self.base_url .. "/story/" .. slug,
+        ["Sec-Fetch-Mode"] = "cors",
+        ["Sec-Fetch-Site"] = "same-origin",
+    })
+    if not json_str then return nil, err end
+
+    local ok, data = pcall(json.decode, json_str)
+    if not ok or type(data) ~= "table" or type(data.data) ~= "table" then
+        return nil, "Invalid JSON"
+    end
+    local item = data.data
+    local meta = { latest_chapter = self:parseLatestChapter(item) }
+    if type(item.completion_status) == "string" then
+        meta.completed = item.completion_status == "completed"
+    end
+    if meta.latest_chapter == nil and meta.completed == nil then
+        return nil, "Không đọc được chương mới nhất"
+    end
+    return meta
 end
 
 function Source:getCompleted(page)

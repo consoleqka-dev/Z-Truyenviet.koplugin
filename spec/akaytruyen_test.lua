@@ -403,4 +403,33 @@ assertEqual(
     "limits Akay background chapter downloads to one request"
 )
 
+local search_html = [[
+<div class="story-item-list d-flex align-items-center position-relative mb-2">
+  <a href="https://akaytruyen.com/truyen/tien-ma-full" class="d-block story-item-list__image"><img src="/a.webp" alt="Tiên Ma Full"></a>
+  <a href="https://akaytruyen.com/truyen/tien-ma-full" class="d-block story-name">Tiên Ma Full</a>
+  <span class="badge">Full</span>
+  <a href="https://akaytruyen.com/tien-ma-full/chuong-120-het" class="story-item-list__chapter text-info">Chương 120</a>
+</div>
+<div class="story-item-list d-flex align-items-center position-relative mb-2">
+  <a href="https://akaytruyen.com/truyen/truyen-dang-ra" class="d-block story-name">Truyện Đang Ra</a>
+</div>
+<div class="story-item-list d-flex align-items-center position-relative mb-2">
+  <a href="https://akaytruyen.com/truyen/truyen-moi" class="d-block story-name">Truyện Mới</a>
+  <a href="https://akaytruyen.com/truyen-moi/chuong-7" class="story-item-list__chapter text-info">Chương 7</a>
+</div>
+]]
+local searched = AkayTruyen:parseSearch(search_html)
+assertEqual(3, #searched, "parses every search item")
+assertEqual(120, searched[1].latest_chapter, "reads latest chapter number")
+assertEqual(true, searched[1].completed, "reads Full badge")
+assertEqual(nil, searched[2].latest_chapter, "missing chapter link does not borrow the next item count")
+assertEqual(false, searched[2].completed, "item without Full badge is ongoing")
+assertEqual(7, searched[3].latest_chapter, "reads count of the last item")
+
+clearRequests()
+response_by_url["https://akaytruyen.com/tim-kiem?key_word=ti%C3%AAn"] = search_html
+local found = assert(AkayTruyen:search("tiên"))
+assertEqual(true, requested_urls[1]:find("key_word=", 1, true) ~= nil, "searches with the key_word parameter")
+assertEqual(3, #found, "search returns parsed items")
+
 print(string.format("AkayTruyen tests passed: %d assertions", assertions))

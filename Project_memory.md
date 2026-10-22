@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.12.0` (`BUILD-1375`) |
+| **Phiên bản hiện tại** | Codebase: `v3.17.8` (`BUILD-1391`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -102,8 +102,8 @@ flowchart TD
 | `truyenfull` | Truyện Full | `https://truyenfull.io` | Text | HTML Regex | Nguồn phổ biến, hỗ trợ pagination regex |
 | `truyenqq` | Truyện QQ | `https://truyenqqto.com` | Comic | HTML Regex | Truyện tranh, cào danh sách ảnh chương |
 | `dualeo` | Dưa Leo Truyện | `https://dualeotruyen5.com` | Comic | HTML Regex | Truyện tranh |
-| `truyendich` | Truyện Dịch | `https://truyendich.com` | Text | HTML Regex | Danh mục phong phú |
-| `cbunu` | Cbunu | `https://cbunu.com` | Text | HTML + Session | Cần quản lý Set-Cookie trang chủ |
+| `truyendich` | Truyện Dịch | `https://truyendich.space` | Text | JSON API + HTML | Tìm kiếm qua `/api/novels/search` (HTML render phía client); `.ai`/`.fit` bị chặn TLS từ VN nên dùng `.space`, URL cũ tự đổi |
+| `cbunu` | Cbunu | `https://cucbongunu.com` | Text | HTML + Session | Cần quản lý Set-Cookie trang chủ |
 | `haccbl` | Hắc Cbl | `https://haccbl.top` | Text | HTML + AES/PBKDF2 | Giải mã nội dung chương mã hóa JS |
 | `giatocvuongtai` | Gia Tộc Vương Tài | `https://giatocvuongtai.com` | Text | JSON/HTML | Parse JSON metadata |
 | `docln` | Cổng Light Novel | `https://docln.net` | Text | HTML Regex + RateLimit | Giới hạn 1.2s/request chống chặn IP |
@@ -112,12 +112,12 @@ flowchart TD
 | `mizzya` | Mizzya | `https://mizzya.com` | Text | HTML Regex | Nguồn truyện nhẹ |
 | `metruyenvn` | Mê Truyện VN | `https://metruyen.net.vn` | Text | HTML Regex | Phân trang và tìm kiếm theo danh mục |
 | `aztruyen` | AZ Truyện | `https://aztruyen.com` | Text | HTML Regex | Nhiều danh mục hot/hoàn thành |
-| `dualeotruyenfull`| Dưa Leo Full | `https://dualeotruyenfull.com` | Text | HTML Regex | Phiên bản chữ |
+| `dualeotruyenfull`| Dưa Leo Full | `https://dualeotruyenfull.net` | Text | initlise JSON + HTML | Tìm kiếm qua `/wp-json/initlise/v1/search` |
 | `truyenc` | Truyện C | `https://truyenc.com` | Text | HTML Regex | Cover URL thường chứa khoảng trắng thô |
 | `akaytruyen` | Akay Truyện | `https://akaytruyen.com` | Text | AJAX/HTML + VIP Auth | Cache DOM section, endpoint `/search-chapters` |
 | `storyaclick` | Story A Click | `https://storyaclick.com` | Text | HTML Regex | Nguồn mới |
 | `blhvip` | BLH VIP | `https://api.blhvip.vn` | Text | **REST API (JSON)** | Cào qua REST API backend, nhanh & ổn định |
-| `metruyenchuvn` | Mê Truyện Chữ VN | `https://metruyenchuvn.com` | Text | HTML Regex | Parsing DOM chuẩn |
+| `metruyenchuvn` | Mê Truyện Chữ VN | `https://metruyenchu.com.vn` | Text | HTML Regex | Parsing DOM chuẩn |
 | `conduongbachu` | Con Đường Bá Chủ | `https://conduongbachu.com` | Text | **WordPress REST API** | `/wp-json/wp/v2/posts`, kiểm tra `X-WP-Total` |
 | `xtruyen` | X-Truyện | `https://xtruyen.vn` | Text | **Zlib + Base64 decode** | Giải mã chuỗi mã hóa `data_x` qua `ffi/zlib` |
 
@@ -181,7 +181,78 @@ flowchart TD
   - Chuẩn hóa tiêu đề menu và dispatcher action thành `"Truyện Việt"` gọn gàng, giúp ZenOS sắp xếp chính xác dưới chữ **T** (nằm giữa Terminal và Tweak document settings).
   - Đăng ký `self.ui.truyenviet = self` trong `init()` để ZenOS phát hiện cả trên ReaderUI lẫn FileManager.
 
+### 4.12. Tìm kiếm song song với AsyncPool & chương mới nhất (BUILD-1376/1377)
+- **Bối cảnh:** Tìm kiếm chạy tuần tự từng nguồn nên tổng thời gian bằng tổng mọi nguồn; một nguồn chết kéo cả lượt tìm.
+- **Giải pháp:** `truyenviet/async_pool.lua` chạy task trên Copas với giới hạn đồng thời + hạn chót. Ngoài pool tự bơm `copas.step(0.05)`; trong thread của pool (gọi lồng) chỉ `copas.sleep` (Copas không cho step lồng). Coroutine của Trapper KHÔNG phải thread pool. `HttpClient:request` tự chuyển sang `requestAsync` khi `AsyncPool.inPoolThread()`.
+- **Contract nguồn:** gán `story.latest_chapter` (số chương mới nhất site ghi, giữ thập phân), `story.chapter_count` (tổng chính xác, chỉ dùng hiển thị dự phòng "N chương") và `story.completed` từ trang tìm kiếm khi có. Không gán số chương mới nhất vào `chapter_count`; nếu không, khai báo `Source:fetchSearchMeta(story)` (1 request, dùng `Http:get` bình thường). CẤM `copas.step`/`addthread`/vòng concurrency riêng trong nguồn. Nguồn hay 429 đặt `Source.meta_concurrency = 1`.
+- **Lưu ý:** nhánh async bỏ qua `force_luasec` và curl (io.popen chặn cả Copas); `SearchService` thử lại tuần tự một lần cho nguồn lỗi TLS.
+
+
+### 4.13. Tủ truyện gộp truyện trên máy & bìa lớn (BUILD-1378)
+- **Mục "Trên máy":** `source_id = "local"`, `url` = đường dẫn tuyệt đối (file hoặc thư mục). Logic trong `truyenviet/local_library.lua`; mọi nhánh trong `browser.lua` phải kiểm tra `LocalLibrary.isLocal(story)` trước khi gọi nguồn online.
+- **Gắn thư mục ngoài:** trường `offline_dir` trên bản ghi Tủ truyện. `Storage:getLinkedDir` tra cả Tủ truyện cho story mở từ tìm kiếm/lịch sử; `countOfflineChapters` gộp thư mục plugin + thư mục gắn theo số chương. Thư mục gắn là của người dùng: xóa truyện chỉ xóa thư mục plugin.
+- **Nhập (`truyenviet/library_import.lua`):** hàm thuần `collect(ctx)` trả `{items, missing}` để UI xác nhận, `apply(items)` ghi một lần bằng `mergeFavorites`. Khóa chống trùng: `source_id|slug bỏ hậu tố số` (mục local: đường dẫn). Thư mục sách chỉ chứa file sách = một bộ; file cạnh thư mục con = truyện lẻ (giữ nguyên tên file vì thường bắt đầu bằng tác giả).
+- **Bìa (`truyenviet/cover_finder.lua`):** WeebCentral `temp.compsci88.com/cover/fallback/<id>.jpg` (bỏ qua tên tiếng Việt, chỉ nhận trùng tên chuẩn hóa) → og:image → `cover_url` → trích trang bìa file (`BookInfo:getCoverImage`). `cover_source_id` cho `CoverCache.download` biết dùng header của nguồn nào. Ứng viên `file://` không tải qua mạng.
+- **Làm mới tự động:** `meta_time`/`cover_time` lưu trong bản ghi để hạn 12 giờ; nguồn không có `fetchSearchMeta` không bao giờ bị coi là cũ (tránh làm mới mỗi lần mở). `Storage:listFavorites` trả bản sao — trường hiển thị (`source_name`, `offline_count`, `cover_path`, `local_type`) không được lưu.
+
 ---
+
+### 4.14. Xóa truyện khỏi Tủ truyện (BUILD-1379)
+- `LocalLibrary.deleteTargets/collectTargets/countFiles/removeStories/isProtected`; `Storage:removeFavorites` (một lần lưu). Phải tính đường dẫn **trước** khi xóa khỏi Tủ truyện vì `getLinkedDir` tra Tủ truyện.
+- `browser.lua`: `confirmRemoveStories` (2 lựa chọn + xác nhận lần 2) dùng chung cho `toggleFavorite`, mục "Trên máy" và `Browser:selectFavoritesToRemove` (icon `check` trên thanh tiêu đề Tủ truyện).
+- `protectedDirs()`: gốc plugin, `DataStorage:getFullDataDir()`, thư viện sách, `home_dir`, `/sdcard`, `/storage/emulated/0`, `/mnt/onboard`, `/mnt/us`. Spec: `spec/favorite_removal_test.lua`.
+- BUILD-1380: bỏ nút "Xóa" trên từng hàng (che dòng phụ "Đã tải X/N"); chỉ còn icon `check` trên thanh tiêu đề và giữ truyện.
+
+### 4.15. Bỏ input tồn đọng sau thao tác chặn UI (BUILD-1380)
+- Tìm kiếm/tải trong `withLoading` chạy đồng bộ (tìm mọi nguồn ~15s). Android giữ cú chạm "Tìm" trong hàng đợi, rồi giao nó cho danh sách kết quả vừa hiện → mở nhầm truyện ở vị trí nút. `withLoading` gọi `Device.input:inhibitInputUntil(true)` ngay sau callback (KOReader không có `UIManager:discardEvents`).
+
+### 4.16. Lịch sử mục "Trên máy", dung lượng, icon thiếu glyph (BUILD-1381)
+- Mục "Trên máy" mở bằng `openEbookFile` nên không qua `Reader` → không có `saveHistory`. `TruyenViet:onReaderReady` (module plugin trong ReaderUI, không trả true) gọi `LocalLibrary.recordRead(file)`: `findOwner` khớp file với mục `local` (chính file hoặc thư mục cha sâu nhất, coi `/sdcard` ≡ `/storage/emulated/0`), lưu `chapter = { title = tên file, url = đường dẫn }`.
+- `Browser:openHistoryItem(item, on_return)`: mục local mở `chapter.url` (hoặc danh sách tập), online vào `loadStoryPage`; dùng cho "Tiếp tục" ở menu gốc, `onTruyenVietContinue`, `onTruyenVietBackToChapters` và Lịch sử đọc.
+- `LocalLibrary.sizeOf/formatSize/storySize`; `annotate` gắn `size_bytes` (không lưu) = dung lượng của `collectTargets({story})`, cùng đường dẫn mà "xóa cả file" sẽ xóa. Spec: `spec/local_history_size_test.lua`.
+- **Font UI của KOReader** (NotoSans → NotoSansCJKsc → nerdfonts/symbols → FreeSans → FreeSerif) không có emoji màu kiểu 📖🏠🔄…; chúng hiện thành ô vuông. Trước khi thêm ký hiệu mới vào chuỗi UI, kiểm tra cmap của 5 font này (fontTools). Có sẵn: ▶ ☰ ⟲ ⤓ ⌂ ↻ ⌕ ☷ ⧉ ⇅ ✎ ● ✕ ★ ☐ ☑ ⚙ ⚡ ✓ ✗ ✅ ❌ 🆕 🌐 🔥 🔊 🔤 🔝.
+
+### 4.17. Crash Menu khi cột `mandatory` quá dài (BUILD-1382)
+- `MenuItem` của KOReader không giới hạn độ rộng `mandatory`: `available_width = content_width - mandatory_w - …`; nếu âm thì `setMaxWidth` → `textwidget.lua:224 makeLine (width must be strictly positive)` → KOReader crash (logcat chỉ còn lỗi FORTIFY "destroyed mutex" khi tắt; phải bắt logcat trực tiếp mới thấy lỗi Lua). Mọi `mandatory` có thể dài (tên chương, tên file, tác giả) phải qua `Util.shorten(text, 24)`.
+
+### 4.18. Mục lục lưu + làm mới nền (BUILD-1383)
+- `chapter_cache.lua`: một file `string.buffer` cho mỗi `source|url|page` trong `Storage:getChapterCacheDir()`, lưu kết quả **thô** của `getStoryPage` (thứ tự của nguồn; `ChapterOrder.apply` áp lại lúc mở). `ttl = 600`.
+- `background_fetch.lua`: chạy `source:getStoryPage` bằng `ffiutil.runInSubProcess` + pipe, UIManager thăm dò. Một việc một lúc; khác key thì hủy việc cũ (`"cancelled"`). Nguồn sửa `story` tại chỗ nhưng ở tiến trình con → phải chép `result.story` về. Tiến trình con không được đụng UI/settings (các nguồn hiện tại không làm).
+- `Browser:loadStoryPage(..., force_refresh)`: có bản lưu thì mở ngay (`refresh_state` = offline/fresh/running); `startRefresh` cập nhật `page_data` tại chỗ và `refreshChapterView` gọi `switchItemTable(nil, items, -1)` nếu view còn hiện. `ListView:onCloseWidget` đặt `_truyenviet_hidden` vì `UIManager:close` trực tiếp không qua `onClose`. `openChapter` tìm chương kề lúc bấm. Spec: `spec/chapter_list_flow_test.lua`.
+- "Chỉ xóa chương đã tải": `LocalLibrary.downloadTargets/collectDownloadTargets/removeDownloads`; thư mục gắn ngoài chỉ xóa file trùng `Storage.chapterFileName` của mục lục lưu.
+
+### 4.19. Giữ trang khi quay lại danh sách, bìa Lịch sử (BUILD-1384)
+- Quay lại danh sách là tạo `StoryResults` mới, `ListView:init` luôn đặt `show_page = 1`. Truyền `focus_story` (qua `options.focus_story` của `showStories`, tham số thứ 2 của `showFavorites`/`showHistory`); `StoryResults:showStoryPage` đặt `show_page` theo vị trí truyện rồi `_populateItems()`.
+- `Storage:saveHistory` lưu bản chụp `favoriteRecord` lúc đọc; bìa tìm sau (`LocalLibrary.findCovers`) chỉ ghi vào Tủ truyện. `showHistory` gọi `LocalLibrary.copyFavoriteCovers(stories, Storage:listFavorites())` để lấy `cover_url/cover_source_id/cover_found/cover_time` của mục Tủ truyện.
+- `SourceRegistry` không có nguồn `local`: mọi chỗ chỉ xử lý truyện khi `SourceRegistry:get(id)` trả về nguồn sẽ bỏ sót mục "Trên máy" (BUILD-1385: `showStories` không đọc bìa cho Lịch sử đọc). Kiểm tra thêm `LocalLibrary.isLocal(story)`.
+
+### 4.20. Cờ ngữ cảnh của Dispatcher action (BUILD-1386)
+- Trong `Dispatcher:registerAction`, `reader = true` (hoặc `rolling`/`paging`) không chỉ là mục hiển thị: `Dispatcher:isActionEnabled` tắt action khi không có ReaderUI, nên cử chỉ/profile gán action đó im lặng không chạy ở trình duyệt file và Lịch sử. Action dùng được mọi nơi chỉ đặt `general`/`filemanager`. Kiểm tra bằng `spec/dispatcher_actions_test.lua`.
+
+### 4.21. Vị trí chương trên thanh trạng thái (BUILD-1387)
+- `truyenviet/chapter_position.lua` tính "Chương X/Y" từ `page_data` (đảo chỉ số khi `chapter_sort = "desc"`) và "Tập X/Y" từ danh sách file thư mục. `Browser:openChapter` / `Browser:openFolderBook` gọi `Reader:setPosition(path, text)` trước khi mở; `Reader` gắn hàm vào `ReaderFooter:addAdditionalFooterContent` chỉ khi file đang mở trùng path (so 2 phần cuối của path vì KOReader có thể dùng `/sdcard` hoặc `/storage/emulated/0`), và gỡ ra khi đóng.
+
+### 4.22. Tự xóa chương cũ (auto purge) xóa toàn bộ chương phía trước
+- `triggerPrefetchAndPurge` xóa mọi chương đã tải từ chương đang đọc − `purge_distance` (mặc định 5) về chương 1, bằng `os.remove`, không thể khôi phục. Ngày 2026-10-22 mở chương 412 của Ace of the Diamond đã xóa 413 chương, chỉ còn 5. Người dùng chọn chưa sửa hành vi này.
+
+### 4.23. Mở plugin khi KOReader khởi động (BUILD-1388)
+- Profile autoexec "Start" gọi `Dispatcher:execute` ở nextTick, và `UIManager:sendEvent` chỉ giao sự kiện cho cửa sổ trên cùng. Với `start_with = "history"` (hoặc favorites, folder_shortcuts), cửa sổ đó là màn Lịch sử nên `StartTruyenViet` bị bỏ qua. Plugin tự mở bằng tuỳ chọn `open_on_start` trong `settings/truyenviet.lua`: `TruyenViet:openOnStart()` chạy một lần mỗi tiến trình (biến cấp module) và gọi `Browser:showRoot()` ở nextTick. Nếu vừa bật tuỳ chọn này vừa để profile chạy lúc khởi động với `start_with = "filemanager"` thì Truyện Việt mở hai lần; chỉ dùng một trong hai.
+- `Reader:positionText` ưu tiên vị trí do `Browser` ghi trước khi mở chương; nếu không có và file nằm trong `<root>/<nguồn>/<truyện>/` thì đếm theo `Storage:getOfflineIndex`.
+
+### 4.24. Chuyển chương khi reader còn mở làm mất phiên đọc (BUILD-1389)
+- `Reader:show` khi đang đọc bật `active = true` ngay, rồi ở nextTick mới đóng reader cũ. `onCloseWidget` của reader cũ chạy sau đó, đặt `active = false` (và có thể gọi `on_return_callback` của chương mới). Chương mới chạy với `active = false`, nên hết chương bấm next thì `returnToPlugin` dừng ngay ("early return ... active=false"). Gặp ngày 2026-10-22: mở Darwin Jihen chương 50 khi Ace chương 412 còn mở.
+- Sửa: `Reader.session` tăng mỗi lần `Reader:show`; listener của mỗi ReaderUI giữ số phiên lúc tạo, và `onCloseWidget` chỉ tắt phiên / gọi callback quay về nếu số đó còn là phiên hiện tại. Vẫn luôn gỡ nội dung "Chương X/Y" khỏi thanh trạng thái.
+- Một phiên Truyện Việt: `truyenviet/windows.lua` ghi nhớ các `ListView` và `StoryResults` đang mở (bảng khoá yếu; `init` ghi, `onCloseWidget` xoá). `Browser:showRoot()` đóng chương của plugin trước nếu `Reader.active` và còn `ReaderUI.instance` (qua `Reader:returnToPlugin`, rồi gọi lại `showRoot`), sau đó `Windows.closeAll()` đóng mọi cửa sổ cũ và bỏ `on_return_callback` của chúng. Thoát KOReader trên Android tắt hẳn tiến trình (log "Tearing down UIManager", PID mới khi mở lại), nên không còn phiên nào chạy ngầm sau khi thoát (xem 4.25 cho trường hợp Exit khi đang đọc chương của plugin).
+
+### 4.25. Exit khi đang đọc chương của plugin không thoát KOReader (BUILD-1390)
+- Menu Exit/Restart của KOReader phát sự kiện `Exit`/`Restart`; `DeviceListener` gọi `ReaderMenu:exitOrRestart`, chỉ đóng reader (`ui:onClose()`), không gọi `UIManager:quit()`. KOReader tự thoát khi không còn cửa sổ (log "No dialogs left to show"). `onCloseWidget` của plugin lại hẹn `on_return_callback` mở danh sách chương, nên KOReader còn cửa sổ và không thoát. Exit không để lại log nào. Gặp ngày 2026-10-22 ở Darwin Jihen chương 50.
+- Sửa: listener của reader có `onExit`/`onRestart` (không trả `true` để KOReader vẫn xử lý tiếp) đánh dấu đang thoát; `onCloseWidget` khi đó bỏ callback quay về. Mỗi lần reader đóng ghi một dòng `Reader:onCloseWidget ...` vào `truyenviet-debug.txt` kèm lý do (KOReader Exit/Restart, Truyện Việt đóng, quay về Truyện Việt, chương cũ khi chuyển chương).
+- Lưu ý: bản này vẫn chưa thoát hẳn nếu Lịch sử mở lúc khởi động còn nằm dưới reader; xem 4.26.
+
+### 4.26. Exit về màn Lịch sử thay vì thoát KOReader (BUILD-1391)
+- Máy để `start_with = "history"`: lúc khởi động KOReader mở `FileManager` rồi `history.booklist_menu` (một cửa sổ riêng), Truyện Việt mở đè lên. Khi mở chương, `ReaderUI:showReader` phát `ShowingReader`, chỉ `FileManager:onShowingReader` đóng trình duyệt file; Lịch sử không có handler nên còn lại. Mở sách từ chính Lịch sử thì KOReader gọi `close_callback` của danh sách trước (`filemanagerutil.openFile(..., self.close_callback)`); plugin gọi `showReader` trực tiếp nên bỏ qua bước này. Exit đóng reader xong vẫn còn Lịch sử, không có "No dialogs left to show". Gặp ngày 2026-10-22 sau khi cài BUILD-1390 (log plugin đã ghi "not reopening Truyện Việt").
+- Sửa: `Reader:show` (cả mở mới lẫn chuyển chương) gọi `closeBookLists()` trước `SetupShowReader`: với `FileManager.instance` và `ReaderUI.instance`, gọi `close_callback(true)` của `history.booklist_menu`, `collections.booklist_menu`, `collections.coll_list` nếu có (bọc `pcall`, ghi log số danh sách đã đóng). `coll_list.close_callback` cần `force_close` để đóng khi đang ở chế độ chọn.
+- Còn lại: nút "📖 Mở đọc ngay" sau khi tải Google Drive (`browser.lua`) gọi `ReaderUI:showReader` trực tiếp, chưa đi qua `Reader:show`.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

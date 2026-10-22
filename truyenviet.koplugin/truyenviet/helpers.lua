@@ -60,6 +60,19 @@ function Util.trim(value)
     return tostring(value):match("^%s*(.-)%s*$")
 end
 
+-- Rút gọn chuỗi UTF-8 còn tối đa `limit` ký tự, thêm "…" khi bị cắt.
+function Util.shorten(value, limit)
+    local text = tostring(value or "")
+    local chars = {}
+    for char in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        chars[#chars + 1] = char
+        if #chars > limit then
+            return table.concat(chars, "", 1, limit - 1) .. "…"
+        end
+    end
+    return text
+end
+
 function Util.decodeHtml(value)
     if value == nil then
         return ""
@@ -229,6 +242,30 @@ function Util.stableHash(value)
         hash = (hash * 33 + value:byte(index)) % 4294967296
     end
     return string.format("%08x", hash)
+end
+
+-- Bản sao chỉ gồm chuỗi/số/boolean và bảng của chúng (bỏ function, userdata,
+-- metatable) để mã hóa bằng string.buffer hoặc gửi qua pipe.
+function Util.plainData(value, depth)
+    local kind = type(value)
+    if kind == "string" or kind == "number" or kind == "boolean" then
+        return value
+    end
+    depth = depth or 0
+    if kind ~= "table" or depth > 12 then
+        return nil
+    end
+    local copy = {}
+    for key, item in pairs(value) do
+        local key_kind = type(key)
+        if key_kind == "string" or key_kind == "number" then
+            local plain = Util.plainData(item, depth + 1)
+            if plain ~= nil then
+                copy[key] = plain
+            end
+        end
+    end
+    return copy
 end
 
 function Util.uniqueBy(items, key)

@@ -35,11 +35,24 @@ function Source:parseSearch(html)
                 for image_url in preceding:gmatch('data%-image="([^"]+)"') do
                     cover = image_url
                 end
+                -- Phần sau </h3> tới <h3 kế tiếp chứa nhãn "full" và link chương mới nhất
+                -- (dạng .../chuong-N/ hoặc .../quyen-8-chuong-N/); lấy N làm số chương.
+                local tail = html:sub(heading_end + 1, (html:find("<h3", heading_end + 1, true) or (#html + 1)) - 1)
+                local latest = tail:match('text%-info.-href="[^"]-chuong%-(%d+)/?"')
+                -- Chỉ kết luận "chưa hoàn thành" khi khối thông tin có mặt (tránh h3 ngoài danh sách)
+                local completed
+                if tail:find("label%-full") then
+                    completed = true
+                elseif tail:find("text%-info") then
+                    completed = false
+                end
                 table.insert(stories, {
                     source_id = self.id,
                     title = Util.decodeHtml(title),
                     url = Util.absoluteUrl(self.base_url, href),
                     cover_url = Util.absoluteUrl(self.base_url, cover),
+                    latest_chapter = tonumber(latest),
+                    completed = completed,
                     kind = self.kind,
                 })
             end
@@ -126,8 +139,8 @@ function Source:getSections()
         { id = "hot", name = "🔥 Truyện Hot / Đề Cử" },
         { id = "completed", name = "✅ Truyện Hoàn Thành (Full)" },
         { id = "updating", name = "🆕 Truyện Mới Cập Nhật" },
-        { id = "genres", name = "📚 Tất Cả Thể Loại" },
-        { id = "search", name = "🔍 Tìm Kiếm Trên TruyenFull" },
+        { id = "genres", name = "☷ Tất Cả Thể Loại" },
+        { id = "search", name = "⌕ Tìm Kiếm Trên TruyenFull" },
     }
 end
 

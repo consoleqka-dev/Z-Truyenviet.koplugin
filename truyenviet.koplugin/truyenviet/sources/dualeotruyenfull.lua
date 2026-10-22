@@ -86,12 +86,73 @@ local function parseStories(html, source_id)
     return stories
 end
 
+-- Tìm kiếm `/?s=` chỉ ra trang blog; site dùng REST live-search của theme
+-- (init-live-search): mảng JSON {id,title (có <mark>),url,thumb,post_type}.
+-- Chỉ lấy post_type "manga" (bỏ bài viết/trang).
 function Source:search(query)
-    local encoded = ko_util.urlEncode(query)
-    local url = self.base_url .. "/?s=" .. encoded
-    local html, err = Http:get(url, stdHeaders(self.base_url))
+    local url = self.base_url .. "/wp-json/initlise/v1/search?term=" .. ko_util.urlEncode(query)
+    local body, err = Http:getJson(url, stdHeaders(self.base_url))
+    if not body then return nil, err end
+
+    local data = Util.parseJson(body)
+    if type(data) ~= "table" then
+        return nil, "Phản hồi tìm kiếm không hợp lệ"
+    end
+
+    local stories = {}
+    local seen = {}
+    for _, item in ipairs(data) do
+        if type(item) == "table" and item.post_type == "manga"
+                and type(item.url) == "string" and type(item.title) == "string" then
+            local title = Util.stripTags(item.title)
+            if title ~= "" and not seen[item.url] then
+                seen[item.url] = true
+                table.insert(stories, {
+                    source_id = self.id,
+                    title = title,
+                    url = item.url,
+                    cover_url = type(item.thumb) == "string" and item.thumb or nil,
+                    kind = self.kind,
+                })
+            end
+        end
+    end
+    return stories
+end
+
+-- Số chương + chương mới nhất + trạng thái từ JSON-LD của trang truyện (1 request).
+-- hasPart liệt kê vài chương mới nhất với "issueNumber"; lấy số lớn nhất.
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, stdHeaders(self.base_url))
     if not html then return nil, err end
-    return parseStories(html, self.id)
+
+    local meta = {}
+    local count = tonumber(html:match('"name":"chapterCount","value":"(%d+)"'))
+    if count and count > 0 then
+        meta.chapter_count = count
+    end
+    local latest
+    for raw in html:gmatch('"issueNumber":([%d%.]+)') do
+        local number = tonumber(raw)
+        if number and number > 0 and (not latest or number > latest) then
+            latest = number
+        end
+    end
+    -- Dự phòng: tiêu đề trang dạng "... [Chương 67]".
+    latest = latest or tonumber(html:match('%[Chương%s+([%d%.]+)%]'))
+    if latest and latest > 0 then
+        meta.latest_chapter = latest
+    end
+    local status = html:match('"name":"status","value":"([^"]*)"')
+    if status then
+        meta.completed = status:lower() == "completed"
+    elseif html:find('manga-status">Trọn bộ', 1, true) then
+        meta.completed = true
+    end
+    if meta.chapter_count == nil and meta.latest_chapter == nil and meta.completed == nil then
+        return nil, "Không đọc được số chương"
+    end
+    return meta
 end
 
 function Source:getCompleted(page)

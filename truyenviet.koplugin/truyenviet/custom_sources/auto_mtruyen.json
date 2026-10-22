@@ -11,10 +11,12 @@
   },
   "search": {
     "path": "/tim-kiem?q={query}",
-    "story_block_pattern": "<a[^>]+href=\"([^\"]*/truyen/[^\"]*)\"[^>]*>([%s%S]-)</a>",
+    "item_marker": "<a class=\"group block ",
     "url_pattern": "href=\"([^\"]*/truyen/[^\"]*)\"",
-    "title_pattern": "<h[34][^>]*>([%s%S]-)</h[34]>",
-    "cover_pattern": "src=\"([^\"]+)\""
+    "title_pattern": "<h3[^>]*>([^<]*)</h3>",
+    "cover_pattern": "src=\"([^\"]+)\"",
+    "chapter_count_pattern": "<span>%d*[^<]-</span><span>([%d%.,]+)<!%-%- %-%-> chương</span>",
+    "completed_pattern": "<span>Hoàn thành</span><span>[%d%.,]+<!%-%- %-%-> chương"
   },
   "story_details": {
     "description_pattern": "<div[^>]-class=\"[^\"]*desc[^\"]*\"[^>]*>([%s%S]-)</div>",

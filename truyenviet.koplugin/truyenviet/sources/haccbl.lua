@@ -1,6 +1,10 @@
 local Http = require("truyenviet/http_client")
 local Util = require("truyenviet/helpers")
 local ko_util = require("util")
+local ok_json, json = pcall(require, "json")
+if not ok_json or not json then
+    ok_json, json = pcall(require, "dkjson")
+end
 
 local Source = {
     id = "haccbl",
@@ -102,14 +106,79 @@ function Source:parseSearch(html)
     return Util.uniqueBy(stories, "url")
 end
 
+-- Tìm kiếm `/?s=` không còn trả kết quả; site dùng REST live-search của theme.
+-- Trả mảng JSON {title (có <mark>), url, post_type, thumb}; chỉ lấy post_type "manga".
 function Source:search(query)
-    local url = self.base_url .. "/?s=" .. ko_util.urlEncode(query)
-    local html, err = Http:get(url, requestHeaders())
+    local url = self.base_url .. "/wp-json/initlise/v1/search?term=" .. ko_util.urlEncode(query)
+    local body, err = Http:getJson(url, requestHeaders())
+    if not body then
+        return nil, err
+    end
+    if not ok_json or not json then
+        return nil, "Thiếu thư viện JSON"
+    end
+    local ok, data = pcall(json.decode, body)
+    if not ok or type(data) ~= "table" then
+        return nil, "Phản hồi tìm kiếm không hợp lệ"
+    end
+
+    local stories = {}
+    for _, item in ipairs(data) do
+        if type(item) == "table" and item.post_type == "manga"
+                and type(item.url) == "string" and type(item.title) == "string" then
+            local cover_url = type(item.thumb) == "string" and item.thumb or nil
+            -- KOReader không đọc được AVIF: đổi sang WEBP qua proxy như pickCoverUrl
+            if cover_url and cover_url:find(".avif", 1, true) then
+                cover_url = cover_url:gsub("^https?://", "https://i0.wp.com/") .. "?strip=info&format=webp"
+            end
+            addStory(stories, item.url, item.title, cover_url)
+        end
+    end
+    return Util.uniqueBy(stories, "url")
+end
+
+-- Chương mới nhất: JSON-LD `hasPart` chỉ liệt kê 3 chương mới nhất, mỗi chương có
+-- `"issueNumber":10` hoặc `"issueNumber":83.3` (chương phụ/extra mang số thập phân).
+-- Lấy số lớn nhất thay vì phần tử đầu. Nếu thiếu JSON-LD thì suy từ href của danh sách chương
+-- (`chapter-83-3/` -> 83.3, `chapter-10/` -> 10).
+local function parseLatestChapter(html)
+    local best
+    local function consider(n)
+        if n and n > 0 and (not best or n > best) then best = n end
+    end
+    for value in html:gmatch('"issueNumber"%s*:%s*"?(%d+%.?%d*)"?') do
+        consider(tonumber(value))
+    end
+    if best then return best end
+    for whole, frac in html:gmatch('<div class="chapter%-item">%s*<a[^>]-href="[^"]-/chapter%-(%d+)%-?(%d*)/"') do
+        consider(tonumber(frac ~= "" and (whole .. "." .. frac) or whole))
+    end
+    return best
+end
+
+-- Số chương + trạng thái chính xác từ JSON-LD của trang truyện (1 request).
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, requestHeaders())
     if not html then
         return nil, err
     end
-    return self:parseSearch(html)
+
+    local meta = {}
+    local count = tonumber(html:match('"name":"chapterCount","value":"(%d+)"'))
+    if count and count > 0 then
+        meta.chapter_count = count
+    end
+    local status = html:match('"name":"status","value":"(%a+)"')
+    if status then
+        meta.completed = status:lower() == "completed"
+    end
+    meta.latest_chapter = parseLatestChapter(html)
+    if meta.chapter_count == nil and meta.completed == nil and meta.latest_chapter == nil then
+        return nil, "Không đọc được số chương"
+    end
+    return meta
 end
+
 local function parseGenreLinks(html)
     local genres = {}
     local seen = {}

@@ -40,6 +40,9 @@ function Source:parseSearch(html)
                 url = self.base_url .. "/truyen/" .. item.slug,
                 cover_url = item.img_url,
                 kind = self.kind,
+                -- API tìm kiếm trả sẵn số chương và cờ hoàn thành (is_full).
+                chapter_count = tonumber(item.chapter_count),
+                completed = item.is_full == true,
             })
         end
     end
@@ -56,6 +59,52 @@ function Source:search(keyword, page)
     
     local stories = self:parseSearch(content)
     return stories, 1, 1
+end
+
+-- Chương mới nhất từ trang 1 của chapter_list?new=1 (mới -> cũ). Số lấy từ tên chương
+-- "Chương 885: ..." / "Chương 1300. ..."; lấy số lớn nhất thay vì mục đầu. Chỉ khi không
+-- có tên chương nào mang số mới dùng trường `ord`.
+function Source:parseLatestChapter(parsed)
+    if type(parsed) ~= "table" or type(parsed.data) ~= "table" then
+        return nil
+    end
+    local latest, latest_by_ord
+    for _, item in ipairs(parsed.data) do
+        local name = type(item.name) == "string" and item.name or ""
+        local number = tonumber(name:match("^%s*Chương%s*(%d+%.%d+)"))
+            or tonumber(name:match("^%s*Chương%s*(%d+)"))
+        if number and number > 0 and (not latest or number > latest) then
+            latest = number
+        end
+        local ord = tonumber(item.ord)
+        if ord and ord > 0 and (not latest_by_ord or ord > latest_by_ord) then
+            latest_by_ord = ord
+        end
+    end
+    return latest or latest_by_ord
+end
+
+-- 1 request: trang 1 danh sách chương sắp mới nhất trước. is_full/chapter_count đã có
+-- sẵn từ API tìm kiếm nên chỉ trả thêm latest_chapter.
+function Source:fetchSearchMeta(story)
+    local story_slug = tostring(story.url or ""):match("/truyen/([^/?]+)")
+    if not story_slug then
+        return nil, "Invalid story URL"
+    end
+    local headers = {}
+    local cookie = getCookie()
+    if cookie and cookie ~= "" then headers["Cookie"] = cookie end
+    local content, err = Http:get(
+        "https://api.blhvip.vn/v1/story/" .. story_slug .. "/chapter_list?page=1&new=1",
+        headers
+    )
+    if not content then return nil, err end
+
+    local latest_chapter = self:parseLatestChapter(Util.parseJson(content))
+    if not latest_chapter then
+        return nil, "Không đọc được chương mới nhất"
+    end
+    return { latest_chapter = latest_chapter }
 end
 
 function Source:parseList(html)

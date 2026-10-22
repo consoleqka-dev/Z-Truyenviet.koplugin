@@ -25,12 +25,18 @@ function Source:parseSearch(html)
         
         if href and title then
             title = Util.trim(Util.stripTags(title))
+            -- Biểu tượng dấu tích xanh = truyện đã hoàn thành.
+            -- Số chương lấy từ link chương mới nhất (.../chuong-123/); nil nếu link không có số.
+            local chap_href = block:match('<a href="([^"]+)" class="btn%-link"')
+            local latest_chapter = chap_href and tonumber(chap_href:match("chuong%-(%d+)/?$")) or nil
             table.insert(stories, {
                 source_id = self.id,
                 title = Util.decodeHtml(title),
                 url = Util.absoluteUrl(self.base_url, href),
                 cover_url = cover and Util.absoluteUrl(self.base_url, cover) or nil,
                 kind = self.kind,
+                latest_chapter = latest_chapter,
+                completed = block:find("fa%-check%-circle") ~= nil,
             })
         end
     end
@@ -88,7 +94,7 @@ function Source:getSections()
         { id = "updating", name = "🆕 Mới Cập Nhật" },
         { id = "hot", name = "🔥 Truyện HOT" },
         { id = "completed", name = "✅ Hoàn Thành" },
-        { id = "search", name = "🔍 Tìm Kiếm" },
+        { id = "search", name = "⌕ Tìm Kiếm" },
     }
 end
 
@@ -98,7 +104,13 @@ function Source:parseStoryDetails(html)
         or Util.getMetaContent(html, "name", "description")
         
     local author = html:match('Tác giả.-<a[^>]*>([^<]+)</a>') or html:match('Tác giả.-<div[^>]*>([^<]+)</div>')
-    local status = html:match('Tình trạng.-<div[^>]*>([^<]+)</div>') or html:match('Tình trạng.-<a[^>]*>([^<]+)</a>')
+    -- Trang truyện dùng nhãn "Trạng thái"; giữ "Tình trạng" cho giao diện cũ.
+    local status
+    for _, label in ipairs({ "Trạng thái", "Tình trạng" }) do
+        status = html:match(label .. '.-<div[^>]*>([^<]+)</div>') or html:match(label .. '.-<a[^>]*>([^<]+)</a>')
+        if status and Util.trim(status) ~= "" then break end
+        status = nil
+    end
     
     local genres = {}
     local genre_block = html:match('Thể loại.-<div class="summary%-content">(.-)</div>')

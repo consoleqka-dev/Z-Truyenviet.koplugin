@@ -290,7 +290,7 @@ function DirectImporter:importFromUrl(url, mode_or_key, callback)
         if html then
             schema, analyze_err, meta = self:analyzeHtml(html, base_url, domain_id)
             if schema then
-                method_used = "🚀 Super Scraper Direct HTML (Trực tiếp)"
+                method_used = "⚡ Super Scraper Direct HTML (Trực tiếp)"
             end
         end
 

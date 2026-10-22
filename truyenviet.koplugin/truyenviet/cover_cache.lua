@@ -1,3 +1,5 @@
+local AsyncPool = require("truyenviet/async_pool")
+local Debug = require("truyenviet/debugger")
 local Http = require("truyenviet/http_client")
 local ImageUtils = require("truyenviet/image_utils")
 local Storage = require("truyenviet/storage")
@@ -8,6 +10,8 @@ local lfs = require("libs/libkoreader-lfs")
 local CoverCache = {
     extensions = { "gif", "jpg", "png", "webp" },
     max_prefetch = 10,
+    prefetch_concurrency = 4,
+    prefetch_deadline = 15,
 }
 
 function CoverCache:get(story)
@@ -45,6 +49,18 @@ function CoverCache:download(story, source)
     if not story.cover_url or story.cover_url == "" then
         return nil
     end
+    -- Bìa trích từ file trên máy chỉ có trong cache, không tải được.
+    if story.cover_url:match("^file://") then
+        return nil
+    end
+    -- Bìa tìm từ nguồn khác (vd. WeebCentral) gửi header của nguồn đó.
+    if story.cover_source_id and source and story.cover_source_id ~= source.id then
+        local ok, registry = pcall(require, "truyenviet/source_registry")
+        local cover_source = ok and registry:get(story.cover_source_id)
+        if cover_source then
+            source = cover_source
+        end
+    end
 
     local headers = source.getCoverHeaders and source:getCoverHeaders(story) or {
         ["Referer"] = source.base_url .. "/",
@@ -58,7 +74,11 @@ function CoverCache:download(story, source)
     -- URL này thường đã encode sẵn các ký tự khác).
     local request_url = story.cover_url:gsub(" ", "%%20")
 
-    local content, err, response_headers = Http:requestAsync("GET", request_url, nil, headers)
+    -- Trong pool copas: không retry nhiều và không fallback curl (io.popen
+    -- chặn cả vòng lặp copas).
+    local opts = AsyncPool.inPoolThread()
+        and { timeout = 10, max_retries = 1, no_curl = true } or nil
+    local content, err, response_headers = Http:requestAsync("GET", request_url, nil, headers, opts)
     if not content then
         return nil, err
     end
@@ -100,48 +120,38 @@ function CoverCache:prefetch(stories, registry)
     if fast_mode then return stories end
     
     local limit = math.min(#stories, self.max_prefetch)
+    local failed = 0
     local function safePrefetch(story)
         local source = registry:get(story.source_id)
         if not source then
             return
         end
-        local ok, cover_path = pcall(self.download, self, story, source)
+        local ok, cover_path, err = pcall(self.download, self, story, source)
         if ok then
             story.cover_path = cover_path
         end
-    end
-    
-    local ok, copas = pcall(require, "copas")
-    if ok and copas and copas.addthread then
-        local active_downloads = 0
-        local max_concurrent = 4
-        
-        for index = 1, limit do
-            while active_downloads >= max_concurrent do
-                copas.step()
-            end
-            
-            active_downloads = active_downloads + 1
-            copas.addthread(function()
-                local story = stories[index]
-                safePrefetch(story)
-                active_downloads = active_downloads - 1
-            end)
-        end
-        
-        while active_downloads > 0 do
-            copas.step()
-        end
-    else
-        for index = 1, limit do
-            local story = stories[index]
-            safePrefetch(story)
-            if index % 5 == 0 then
-                collectgarbage("collect")
-            end
+        -- Lỗi tải bìa trước đây bị nuốt im lặng; ghi lại để biết vì sao bìa trống
+        if not ok or not cover_path then
+            failed = failed + 1
+            Debug.write(string.format("[Cover] Lỗi tải bìa %s (%s): %s",
+                tostring(story.cover_url), tostring(story.source_id),
+                tostring(ok and (err or "không có đường dẫn ảnh") or cover_path)))
         end
     end
-    
+
+    -- Dùng AsyncPool (không tự step Copas) nên gọi lồng được từ thread của pool.
+    -- Không có Copas thì AsyncPool tự chạy tuần tự.
+    local tasks = {}
+    for index = 1, limit do
+        tasks[index] = function()
+            safePrefetch(stories[index])
+        end
+    end
+    AsyncPool.run(tasks, {
+        concurrency = self.prefetch_concurrency,
+        deadline = self.prefetch_deadline,
+    })
+
     collectgarbage("collect")
     return stories
 end

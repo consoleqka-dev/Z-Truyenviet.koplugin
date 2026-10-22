@@ -32,13 +32,20 @@ local function parseCards(html, source_id)
         
         if href and title and not seen[href] then
             seen[href] = true
-            table.insert(stories, {
+            local story = {
                 source_id = source_id,
                 title = Util.decodeHtml(title),
                 url = href,
                 cover_url = cover,
                 kind = "text",
-            })
+            }
+            -- Thẻ liệt kê có chương mới nhất ("Chương 27") và nhãn "HẾT" khi đã hoàn thành.
+            -- Truyện đang ra không có nhãn -> để nil (chưa rõ), core sẽ gọi fetchSearchMeta.
+            local meta_block = block:sub(1, 3000)
+            local latest = tonumber(meta_block:match('class="comic%-chapter"[^>]*>%s*Chương%s+(%d+)'))
+            if latest and latest > 0 then story.latest_chapter = latest end
+            if meta_block:find('label%-success[^>]*>%s*HẾT') then story.completed = true end
+            table.insert(stories, story)
         end
         pos = block_e + 1
     end
@@ -67,12 +74,79 @@ local function parseListing(html, page, source_id, base_url)
     }
 end
 
+-- Ô tìm kiếm `?s=` của site đã bị đóng ("Chức năng này đã bị đóng!"); site tự gọi
+-- admin-ajax `searchtax` (trả JSON tối đa 10 mục, lẫn cả thể loại/nhóm dịch -> chỉ giữ /truyen/).
+-- cstatus: "Trọn bộ" = đã hoàn thành, "Đang tiến hành" = còn ra.
 function Source:search(query)
-    local encoded = ko_util.urlEncode(query)
-    local url = self.base_url .. "/?s=" .. encoded
-    local html, err = Http:get(url, stdHeaders(self.base_url))
+    local headers = stdHeaders(self.base_url)
+    headers["X-Requested-With"] = "XMLHttpRequest"
+    headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
+    local body, err = Http:postForm(
+        self.base_url .. "/wp-admin/admin-ajax.php",
+        { action = "searchtax", keyword = query },
+        headers
+    )
+    if not body then return nil, err end
+
+    local data = Util.parseJson(body)
+    if type(data) ~= "table" or type(data.data) ~= "table" then
+        return nil, "Mê Truyện VN trả về dữ liệu tìm kiếm không hợp lệ"
+    end
+
+    local stories = {}
+    local seen = {}
+    for _, item in ipairs(data.data) do
+        local link = type(item) == "table" and item.link or nil
+        local title = type(item) == "table" and item.title or nil
+        if type(link) == "string" and type(title) == "string"
+            and link:find("^https?://metruyenvn%.org/truyen/") and not seen[link] then
+            seen[link] = true
+            local story = {
+                source_id = self.id,
+                title = Util.decodeHtml(title),
+                url = link,
+                cover_url = type(item.img) == "string" and item.img or nil,
+                kind = "text",
+            }
+            if item.cstatus == "Trọn bộ" then
+                story.completed = true
+            elseif item.cstatus == "Đang tiến hành" then
+                story.completed = false
+            end
+            table.insert(stories, story)
+        end
+    end
+    return stories
+end
+
+-- Meta nhẹ cho kết quả tìm kiếm/duyệt: đúng 1 request vào trang truyện.
+-- Danh sách chương trên trang thưa và gom nhóm nên không đếm link; lấy số chương lớn nhất
+-- trong bảng chương (dạng /chuong-27-67/ hoặc /<slug>-chuong-7/) làm số chương.
+function Source:fetchSearchMeta(story)
+    local html, err = Http:get(story.url, stdHeaders(self.base_url))
     if not html then return nil, err end
-    return parseCards(html, self.id)
+
+    local latest
+    for anchor in html:gmatch('<a class="text%-capitalize" href="([^"]+)"') do
+        local n = tonumber(anchor:match('.*chuong%-(%d+)'))
+        if n and (not latest or n > latest) then latest = n end
+    end
+    if not latest then
+        latest = tonumber(html:match('href="https?://metruyenvn%.org/chuong%-(%d+)%-%d+/"'))
+    end
+
+    local meta = {}
+    if latest and latest > 0 then meta.latest_chapter = latest end
+
+    local status_html = html:match('<strong>Tình trạng:</strong>%s*<span[^>]*>(.-)</span>')
+    if status_html then
+        meta.completed = status_html:find("Trọn bộ", 1, true) ~= nil
+    end
+
+    if meta.latest_chapter == nil and meta.completed == nil then
+        return nil, "Không đọc được số chương/trạng thái"
+    end
+    return meta
 end
 
 function Source:getCompleted(page)

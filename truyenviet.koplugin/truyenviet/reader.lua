@@ -4,6 +4,7 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
 local Debug = require("truyenviet/debugger")
+local ChapterPosition = require("truyenviet/chapter_position")
 
 local Reader = {
     active = false,
@@ -11,9 +12,72 @@ local Reader = {
     on_return_callback = nil,
     on_next_chapter_callback = nil,
     on_prev_chapter_callback = nil,
+    position = nil,
+    -- Tăng mỗi lần mở chương; reader chỉ được kết thúc phiên của chính nó.
+    session = 0,
 }
 
+-- Ghi "Chương X/Y" cho file sắp mở; thanh trạng thái chỉ hiện khi đúng file đó.
+function Reader:setPosition(path, text)
+    self.position = text and { path = path, text = text } or nil
+end
+
+-- Mở thẳng file trong thư mục tải của plugin (Lịch sử KOReader, trình duyệt
+-- file...): vị trí trong số chương đã tải của truyện đó.
+function Reader:positionText(file)
+    local position = self.position
+    if position and ChapterPosition.samePath(position.path, file) then
+        return position.text
+    end
+    local Storage = require("truyenviet/storage")
+    local dir = ChapterPosition.downloadFolder(Storage:getRootDir(), file)
+    local index = dir and Storage:getOfflineIndex(dir)
+    if not index then
+        return nil
+    end
+    local paths = {}
+    for i, name in ipairs(index.files) do
+        paths[i] = dir .. "/" .. name
+    end
+    return ChapterPosition.format(ChapterPosition.fromFolder(paths, file, "Chương"))
+end
+
+-- Mở sách từ Lịch sử/Bộ sưu tập, KOReader tự đóng các danh sách đó. Plugin mở
+-- reader trực tiếp nên phải tự đóng: danh sách còn nằm dưới reader thì Exit chỉ
+-- đóng reader, KOReader không thoát.
+local function closeBookLists()
+    local FileManager = require("apps/filemanager/filemanager")
+    local closed = 0
+    local uis = { FileManager.instance or false, ReaderUI.instance or false }
+    for _, ui in ipairs(uis) do
+        for _, name in ipairs({ "history", "collections" }) do
+            for _, key in ipairs({ "booklist_menu", "coll_list" }) do
+                local module = ui and ui[name]
+                local menu = module and module[key]
+                if menu and menu.close_callback then
+                    local ok, err = pcall(menu.close_callback, true)
+                    if ok then
+                        closed = closed + 1
+                    else
+                        Debug.write("Reader: failed to close KOReader " .. key .. ": " .. tostring(err))
+                    end
+                end
+            end
+        end
+    end
+    if closed > 0 then
+        Debug.write("Reader: closed " .. closed .. " KOReader book list(s) before opening a chapter")
+    end
+end
+
+local function openReader(path)
+    closeBookLists()
+    UIManager:broadcastEvent(Event:new("SetupShowReader"))
+    ReaderUI:showReader(path)
+end
+
 function Reader:show(path, on_return_callback, on_next_chapter_callback, from_reader, on_prev_chapter_callback)
+    self.session = self.session + 1
     self.on_return_callback = on_return_callback
     self.on_next_chapter_callback = on_next_chapter_callback
     self.on_prev_chapter_callback = on_prev_chapter_callback
@@ -51,14 +115,12 @@ function Reader:show(path, on_return_callback, on_next_chapter_callback, from_re
             
             -- Wait for C engines to fully release file locks and memory
             UIManager:scheduleIn(0.6, function()
-                UIManager:broadcastEvent(Event:new("SetupShowReader"))
-                ReaderUI:showReader(path)
+                openReader(path)
                 UIManager:close(loading_msg)
             end)
         end)
     else
-        UIManager:broadcastEvent(Event:new("SetupShowReader"))
-        ReaderUI:showReader(path)
+        openReader(path)
     end
     self.active = true
 end
@@ -68,15 +130,58 @@ function Reader:initializeFromReaderUI(ui)
     
     ui:registerPostInitCallback(function()
         local listener = WidgetContainer:new({})
-        
+        local session = self.session
+
+        local footer = ui.view and ui.view.footer
+        local position_content
+        if footer and type(footer.addAdditionalFooterContent) == "function" then
+            local file = ui.document and ui.document.file
+            local ok, text = pcall(self.positionText, self, file)
+            if ok and text then
+                position_content = function()
+                    return text
+                end
+                footer:addAdditionalFooterContent(position_content)
+            end
+        end
+
+        -- Exit/Restart của KOReader chỉ đóng reader rồi để KOReader tự thoát khi
+        -- không còn cửa sổ nào: mở lại danh sách chương sẽ giữ KOReader sống.
+        local quitting
+        listener.onExit = function()
+            quitting = "Exit"
+            Debug.write("Reader: KOReader Exit while a chapter is open")
+        end
+        listener.onRestart = function()
+            quitting = "Restart"
+            Debug.write("Reader: KOReader Restart while a chapter is open")
+        end
+
         listener.onCloseWidget = function()
+            if position_content then
+                footer:removeAdditionalFooterContent(position_content)
+            end
+            -- Mở chương khác khi chương này còn mở: chương này đóng sau khi phiên
+            -- mới đã bắt đầu, không được tắt phiên hay gọi callback quay về của nó.
+            if session ~= self.session then
+                Debug.write("Reader:onCloseWidget from an earlier chapter, session kept")
+                return
+            end
             self.active = false
-            if not self.returning and self.on_return_callback then
+            if quitting then
+                self.on_return_callback = nil
+                Debug.write("Reader:onCloseWidget by KOReader " .. quitting .. ", not reopening Truyện Việt")
+            elseif self.returning then
+                Debug.write("Reader:onCloseWidget by Truyện Việt")
+            elseif self.on_return_callback then
+                Debug.write("Reader:onCloseWidget, returning to Truyện Việt")
                 local UIManager = require("ui/uimanager")
                 local callback = self.on_return_callback
                 self.on_return_callback = nil
                 -- Use nextTick to ensure the reader is fully closed before showing the browser
                 UIManager:nextTick(callback)
+            else
+                Debug.write("Reader:onCloseWidget, no return callback")
             end
         end
 

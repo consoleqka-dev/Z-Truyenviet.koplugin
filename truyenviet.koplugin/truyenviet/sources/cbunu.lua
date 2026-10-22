@@ -6,9 +6,19 @@ local Source = {
     id = "cbunu",
     name = "Cbunu",
     kind = "comic",
-    base_url = "https://cbunu.com",
+    -- Site đã chuyển cbunu.com -> cucbongunu.com (301)
+    base_url = "https://cucbongunu.com",
     reversed_chapters = true,
 }
+
+-- URL truyện/chương đã lưu có thể còn domain cũ: đổi về domain hiện tại để khỏi tốn 1 lần redirect
+local function normalizeUrl(url)
+    if type(url) ~= "string" then
+        return url
+    end
+    return (url:gsub("^https?://[Ww][Ww][Ww]%.cbunu%.com", Source.base_url)
+        :gsub("^https?://cbunu%.com", Source.base_url))
+end
 
 -- Cookie phiên lấy động từ trang chủ, không hardcode giá trị tĩnh
 local session_cookie = nil
@@ -48,7 +58,7 @@ local function extractSetCookie(headers)
 end
 
 local site_blocked = false
-local BLOCKED_MESSAGE = "Cbunu.com yêu cầu đăng nhập hoặc đang bảo trì, nguồn tạm thời không khả dụng."
+local BLOCKED_MESSAGE = "Cbunu yêu cầu đăng nhập hoặc đang bảo trì, nguồn tạm thời không khả dụng."
 
 local function refreshSessionCookie()
     local html, err, headers, status_code = Http:get(Source.base_url .. "/", {
@@ -160,8 +170,49 @@ local function parseStoryCards(html)
     return Util.uniqueBy(stories, "url")
 end
 
+-- Thẻ truyện kiểu mới: badge "Đã hoàn" + 2 chương mới nhất (pill).
+-- Số chương chỉ xấp xỉ (= số chương mới nhất, bỏ phần lẻ); chỉ biết chắc "hoàn thành"
+-- khi có badge, các badge khác không nói lên truyện đang ra hay không -> completed = nil.
+local function parseCardMeta(card_html)
+    local meta = {}
+    local badge = card_html:match('cb%-story%-badge">([^<]+)<')
+    if badge and badge:find("Đã hoàn", 1, true) then
+        meta.completed = true
+    end
+    local pills = card_html:match('<div class="cb%-chapter%-pills">([%s%S]-)</div>')
+    local latest = 0
+    for number in tostring(pills or ""):gmatch("Chương%s+(%d+%.?%d*)") do
+        local value = tonumber(number)
+        if value and value > latest then
+            latest = value
+        end
+    end
+    if latest >= 1 then
+        meta.latest_chapter = latest
+    end
+    return meta
+end
+
+local function parseCards(html)
+    local stories = {}
+    for card_html in tostring(html or ""):gmatch('<article class="cb%-story%-card">([%s%S]-)</article>') do
+        local story = parseStoryCards(card_html)[1]
+        if story then
+            local meta = parseCardMeta(card_html)
+            story.latest_chapter = meta.latest_chapter
+            story.completed = meta.completed
+            table.insert(stories, story)
+        end
+    end
+    stories = Util.uniqueBy(stories, "url")
+    if #stories > 0 then
+        return stories
+    end
+    return parseStoryCards(html)
+end
+
 function Source:parseSearch(html)
-    local stories = parseStoryCards(html)
+    local stories = parseCards(html)
     if #stories > 0 then
         return stories
     end
@@ -206,7 +257,7 @@ function Source:search(query)
     end
     local encoded_query = urlEncode(query)
     local html, err = Http:get(
-        self.base_url .. "/?s=" .. encoded_query,
+        self.base_url .. "/tim-kiem.html?q=" .. encoded_query,
         requestHeaders()
     )
     if not html then
@@ -217,7 +268,7 @@ end
 
 function Source:parseListing(html, page)
     return {
-        stories = parseStoryCards(html),
+        stories = parseCards(html),
         genres = Util.parseGenres(html, self.base_url),
         page = page or 1,
         total_pages = Util.maxPage(html, page),
@@ -229,9 +280,9 @@ function Source:getCompleted(page)
         return nil, BLOCKED_MESSAGE
     end
     page = page or 1
-    local url = self.base_url .. "/truyen-hoan-thanh.html"
+    local url = self.base_url .. "/da-hoan"
     if page > 1 then
-        url = self.base_url .. "/truyen-hoan-thanh/trang-" .. page .. ".html"
+        url = url .. "?completed_page=" .. page
     end
     local html, err = Http:get(url, requestHeaders())
     if not html then
@@ -283,6 +334,11 @@ function Source:parseStoryDetails(html)
     for paragraph in tostring(status_html or ""):gmatch("<p[^>]*>([%s%S]-)</p>") do
         status = Util.stripTags(paragraph)
     end
+    -- Giao diện mới: <p>Tình trạng: Đang tiến hành</p> (không còn <li class="status">)
+    local new_status = html:match("Tình trạng:%s*([^<]+)</p>")
+    if new_status then
+        status = Util.trim(new_status)
+    end
 
     return {
         description = Util.stripTags(description_html)
@@ -298,11 +354,44 @@ function Source:getStoryDetails(story)
     if site_blocked then
         return nil, BLOCKED_MESSAGE
     end
-    local html, err = Http:get(story.url, requestHeaders())
+    local html, err = Http:get(normalizeUrl(story.url), requestHeaders())
     if not html then
         return nil, err
     end
     return self:parseStoryDetails(html)
+end
+
+-- Số chương chính xác + trạng thái từ trang truyện (1 request, danh sách chương nằm trọn trong trang).
+-- Không gọi requestHeaders() để khỏi tốn request lấy cookie; chỉ dùng cookie đã có.
+function Source:fetchSearchMeta(story)
+    if site_blocked then
+        return nil, BLOCKED_MESSAGE
+    end
+    local headers = { ["Referer"] = self.base_url .. "/" }
+    if session_cookie then
+        headers["Cookie"] = session_cookie
+    end
+    local html, err = Http:get(normalizeUrl(story.url), headers)
+    if not html then
+        return nil, err
+    end
+
+    local meta = {}
+    local count = 0
+    for _ in html:gmatch('data%-chapter%-order="') do
+        count = count + 1
+    end
+    if count > 0 then
+        meta.chapter_count = count
+    end
+    local status = html:match("Tình trạng:%s*([^<]+)</p>")
+    if status then
+        meta.completed = status:find("Đã hoàn", 1, true) ~= nil
+    end
+    if meta.chapter_count == nil and meta.completed == nil then
+        return nil, "Không đọc được số chương"
+    end
+    return meta
 end
 
 function Source:parseStoryPage(html, story)
@@ -359,7 +448,7 @@ function Source:getStoryPage(story)
     if site_blocked then
         return nil, BLOCKED_MESSAGE
     end
-    local html, err = Http:get(story.url, requestHeaders())
+    local html, err = Http:get(normalizeUrl(story.url), requestHeaders())
     if not html then
         return nil, err
     end
@@ -521,8 +610,9 @@ function Source:getChapter(chapter)
     if site_blocked then
         return nil, BLOCKED_MESSAGE
     end
-    Debug.write("[cbunu] getChapter started for: " .. chapter.url)
-    local html, err, headers, code, body = Http:get(chapter.url, requestHeaders())
+    local chapter_url = normalizeUrl(chapter.url)
+    Debug.write("[cbunu] getChapter started for: " .. chapter_url)
+    local html, err, headers, code, body = Http:get(chapter_url, requestHeaders())
     Debug.write(string.format("[cbunu] getChapter initial request returned code=%s, err=%s", tostring(code), tostring(err)))
     
     if code == 403 or (body and body:find("<title>Đăng nhập</title>", 1, true)) then
@@ -535,7 +625,7 @@ function Source:getChapter(chapter)
         if headers and (headers["set-cookie"] or headers["Set-Cookie"]) then
             parseCookies(headers["set-cookie"] or headers["Set-Cookie"], cookies)
         end
-        html, err = unlockChapter(chapter.url, requestHeaders(), cookies)
+        html, err = unlockChapter(chapter_url, requestHeaders(), cookies)
     end
     
     if not html then
