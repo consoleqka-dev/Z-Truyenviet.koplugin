@@ -145,21 +145,57 @@ function Reader:initializeFromReaderUI(ui)
             end
         end
 
+        -- Tải nền đang chạy: thêm "⤓ x/y" vào thanh trạng thái, gỡ khi xong.
+        local DownloadJob = require("truyenviet/download_job")
+        local download_content
+        local download_text
+        local function onDownloadProgress(status)
+            if not footer or type(footer.addAdditionalFooterContent) ~= "function" then
+                return
+            end
+            local text = status and DownloadJob.progressText()
+            if text == download_text then
+                return
+            end
+            download_text = text
+            if text and not download_content then
+                download_content = function()
+                    return download_text
+                end
+                footer:addAdditionalFooterContent(download_content)
+            elseif not text and download_content then
+                footer:removeAdditionalFooterContent(download_content)
+                download_content = nil
+            end
+            if type(footer.onUpdateFooter) == "function" then
+                footer:onUpdateFooter(ui.view and ui.view.footer_visible)
+            end
+        end
+        DownloadJob.subscribe(onDownloadProgress)
+        onDownloadProgress(DownloadJob.status())
+
         -- Exit/Restart của KOReader chỉ đóng reader rồi để KOReader tự thoát khi
         -- không còn cửa sổ nào: mở lại danh sách chương sẽ giữ KOReader sống.
         local quitting
         listener.onExit = function()
             quitting = "Exit"
             Debug.write("Reader: KOReader Exit while a chapter is open")
+            DownloadJob.cancel("exit")
         end
         listener.onRestart = function()
             quitting = "Restart"
             Debug.write("Reader: KOReader Restart while a chapter is open")
+            DownloadJob.cancel("exit")
         end
 
         listener.onCloseWidget = function()
+            DownloadJob.unsubscribe(onDownloadProgress)
             if position_content then
                 footer:removeAdditionalFooterContent(position_content)
+            end
+            if download_content then
+                footer:removeAdditionalFooterContent(download_content)
+                download_content = nil
             end
             -- Mở chương khác khi chương này còn mở: chương này đóng sau khi phiên
             -- mới đã bắt đầu, không được tắt phiên hay gọi callback quay về của nó.

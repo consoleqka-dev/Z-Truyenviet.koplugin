@@ -243,6 +243,21 @@ function TruyenViet:addToMainMenu(menu_items)
             end,
         },
         {
+            text_func = function()
+                local status = require("truyenviet/download_job").status()
+                if status then
+                    return string.format("⤓ Hủy tải nền (%d/%d)", status.done or 0, status.total or 0)
+                end
+                return "⤓ Hủy tải nền (không có việc)"
+            end,
+            enabled_func = function()
+                return require("truyenviet/download_job").isRunning()
+            end,
+            callback = function()
+                require("truyenviet/download_job").cancel("cancelled")
+            end,
+        },
+        {
             text = "☁ Tải từ Google Drive",
             callback = function()
                 self:onTruyenVietGDriveDownload()
@@ -302,6 +317,19 @@ function TruyenViet:addToMainMenu(menu_items)
             sub_item_table = sub_items,
         }
     end
+end
+
+-- Exit/Restart từ File manager hoặc danh sách: dừng việc tải nền để không
+-- còn tiến trình con chạy sau khi KOReader thoát.
+function TruyenViet:onExit()
+    local DownloadJob = package.loaded["truyenviet/download_job"]
+    if DownloadJob then
+        DownloadJob.cancel("exit")
+    end
+end
+
+function TruyenViet:onRestart()
+    self:onExit()
 end
 
 -- Mở file thuộc mục "Trên máy" (từ Tủ truyện, File manager, lịch sử

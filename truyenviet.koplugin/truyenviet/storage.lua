@@ -111,6 +111,12 @@ function Storage:getChapterCacheDir()
     return path
 end
 
+-- Tiến độ việc tải nền (DownloadJob): tiến trình con ghi, tiến trình chính đọc.
+function Storage:getDownloadProgressPath()
+    self:initialize()
+    return ffiutil.joinPath(self.cache_dir, "download.progress")
+end
+
 function Storage:clearCoverCacheDir()
     local dir = self:getCoverCacheDir()
     local ok = pcall(function()

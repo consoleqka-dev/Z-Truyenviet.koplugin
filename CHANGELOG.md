@@ -1,3 +1,21 @@
+## 3.18.0 (BUILD-1392) - 2026-10-22
+
+### Features & Improvements
+- **Tải chương chạy nền thật sự**: tải chương (danh sách chương, tải theo khoảng) nay chạy trong tiến trình con. Giao diện không còn đứng trong lúc tải; vẫn cuộn danh sách, mở truyện khác và lật trang được. Mỗi lúc chỉ tải nền một truyện. Bấm tải truyện khác khi đang bận thì hiện hộp `Hủy tải nền` / `Đóng`.
+- **Tiến độ khi đang đọc**: đang mở sách thì ô tiến độ nổi được ẩn. Tiến độ hiện trên thanh trạng thái của reader (`⤓ 5/20`), tải xong chỉ hiện báo nhỏ, không bật hộp thoại. Không đọc thì giữ hộp hỏi gộp file như cũ.
+- **Hủy tải nền**: mục `⤓ Hủy tải nền (x/y)` trong menu Truyện Việt của KOReader. Hủy thì dừng tiến trình con và xóa file `.part` ngay.
+- Tiến trình con không có tiến độ mới quá 10 phút thì tự hủy. Máy không fork được thì tải theo cách cũ.
+
+### Bug Fixes
+- **Ô tiến độ nổi nuốt mọi lần chạm**: ô tiến độ là cửa sổ thường và liên tục được đưa lên trên, nên mọi lần chạm (kể cả nút Hủy, menu) đều tới nó và bị bỏ. Nay nó là toast: luôn nằm trên nhưng không chặn chạm.
+- **Exit không thoát được khi đang tải**: KOReader chỉ thoát khi không còn cửa sổ nào; ô tiến độ còn trong ngăn xếp nên Exit bị treo. Nay Exit/Restart đóng ô tiến độ và hủy việc tải nền (từ reader và từ trình duyệt file).
+
+### Tests
+- `spec/download_job_test.lua` (mới): thành công, tiến độ đọc từ file, lỗi trong task, đang bận, hủy (dọn `.part` đồng bộ), treo, không có kết quả, không fork được.
+- `spec/download_chapters_flow_test.lua` (mới): ô tiến độ là toast, ẩn khi đang đọc, hộp hỏi hủy khi bận, xử lý xong/hủy/Exit/lỗi, Exit đóng ô tiến độ, dự phòng cách cũ.
+- `spec/chapter_downloader_test.lua`: chế độ tiến trình con không yield, báo tiến độ mọi chương, không ghi settings.
+- `spec/reader_test.lua`: tiến độ trên thanh trạng thái, Exit/Restart hủy việc tải nền.
+
 ## 3.17.8 (BUILD-1391) - 2026-10-22
 
 ### Bug Fixes

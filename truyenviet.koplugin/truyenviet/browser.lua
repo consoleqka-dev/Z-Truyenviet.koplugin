@@ -2752,21 +2752,25 @@ function Browser:refreshChapterView(page_data, source, on_return_callback)
 end
 
 local Widget = require("ui/widget/widget")
+-- Ô tiến độ góc dưới. Là toast: luôn nằm trên nhưng không chặn chạm (cửa sổ
+-- thường nằm trên cùng sẽ nhận và nuốt mọi chạm của danh sách bên dưới).
 local FloatingProgress = Widget:extend{
     text = "",
+    toast = true,
+    shown = false,
     init = function(self)
         local TextWidget = require("ui/widget/textwidget")
         local FrameContainer = require("ui/widget/container/framecontainer")
         local Size = require("ui/size")
         local Font = require("ui/font")
         local Blitbuffer = require("ffi/blitbuffer")
-        
+
         self.text_w = TextWidget:new{
             text = self.text,
             face = Font:getFace("infofont", 18),
             fgcolor = Blitbuffer.COLOR_BLACK,
         }
-        
+
         self.frame = FrameContainer:new{
             padding = Size.padding.small,
             margin = 0,
@@ -2779,15 +2783,15 @@ local FloatingProgress = Widget:extend{
     updateGeom = function(self)
         local Screen = require("device").screen
         local Geom = require("ui/geometry")
-        
+
         if self.frame.freeSizing then self.frame:freeSizing() end
         local size = self.frame:getSize()
-        
+
         self.w = size.w
         self.h = size.h
         self.x = 10
         self.y = Screen:getHeight() - self.h - 10
-        
+
         self.dimen = Geom:new{ x = self.x, y = self.y, w = self.w, h = self.h }
     end,
     paintTo = function(self, b, x, y)
@@ -2798,48 +2802,61 @@ local FloatingProgress = Widget:extend{
         if self.text == text then return end
         self.text = text
         local old_dim = { x = self.dimen.x, y = self.dimen.y, w = self.dimen.w, h = self.dimen.h }
-        
+
         self.text_w:setText(text)
         self:updateGeom()
-        
-        local UIManager = require("ui/uimanager")
+        if not self.shown then return end
+
         local Geom = require("ui/geometry")
-        
         local min_x = math.min(old_dim.x, self.dimen.x)
         local min_y = math.min(old_dim.y, self.dimen.y)
         local max_right = math.max(old_dim.x + old_dim.w, self.dimen.x + self.dimen.w)
         local max_bottom = math.max(old_dim.y + old_dim.h, self.dimen.y + self.dimen.h)
-        
-        local dirty_region = Geom:new{
+
+        -- Vẽ lại cả cửa sổ bên dưới vùng cũ (chữ ngắn đi thì phần thừa phải xóa).
+        UIManager:setDirty("all", "ui", Geom:new{
             x = min_x,
             y = min_y,
             w = max_right - min_x,
             h = max_bottom - min_y
-        }
-        UIManager:setDirty(nil, "ui", dirty_region)
+        })
     end,
-    bringToFront = function(self)
-        local UIManager = require("ui/uimanager")
-        UIManager:close(self)
+    show = function(self)
+        if self.shown then return end
+        self.shown = true
         UIManager:show(self)
-        local Geom = require("ui/geometry")
-        UIManager:setDirty(nil, "ui", Geom:new{ x = self.dimen.x, y = self.dimen.y, w = self.dimen.w, h = self.dimen.h })
-    end
+    end,
+    hide = function(self)
+        if not self.shown then return end
+        UIManager:close(self)
+    end,
+    onCloseWidget = function(self)
+        self.shown = false
+    end,
+    -- KOReader chỉ thoát khi không còn cửa sổ nào: đóng ngay khi Exit/Restart.
+    onExit = function(self)
+        self:hide()
+    end,
+    onRestart = function(self)
+        self:hide()
+    end,
 }
 
+-- Chạy task_func trong coroutine của tiến trình chính (chỉ nhường UI giữa các
+-- bước). Dùng cho gom file và làm đường dự phòng khi không fork được.
 local function runInBackground(task_name, task_func, on_complete)
     local indicator = FloatingProgress:new{
         text = "Đang tải ngầm: " .. task_name
     }
-    UIManager:show(indicator)
-    
+    indicator:show()
+
     local co = coroutine.create(task_func)
     local final_result = nil
     local function tick()
         if coroutine.status(co) ~= "dead" then
             local ok, result = coroutine.resume(co)
             if not ok then
-                UIManager:close(indicator)
+                indicator:hide()
                 UIManager:show(InfoMessage:new{
                     title = "Truyện Việt - Lỗi tải",
                     text = "Lỗi khi chạy tải ngầm:\n" .. tostring(result),
@@ -2849,12 +2866,11 @@ local function runInBackground(task_name, task_func, on_complete)
                     final_result = result
                 elseif type(result) == "string" then
                     indicator:setText(result)
-                    indicator:bringToFront()
                 end
                 UIManager:scheduleIn(0.05, tick)
             end
         else
-            UIManager:close(indicator)
+            indicator:hide()
             UIManager:show(Notification:new{
                 text = "Tải ngầm hoàn tất: " .. task_name,
             })
@@ -2864,6 +2880,192 @@ local function runInBackground(task_name, task_func, on_complete)
     UIManager:scheduleIn(0, tick)
 end
 
+local function isReading()
+    return require("apps/reader/readerui").instance ~= nil
+end
+
+local function downloadJobText(status)
+    return string.format(
+        "⤓ %s %d/%d",
+        Util.shorten(status.title, 24),
+        status.done or 0,
+        status.total or 0
+    )
+end
+
+-- Đang có việc tải nền: hỏi hủy (mỗi lúc chỉ một việc).
+function Browser:showDownloadJobDialog()
+    local DownloadJob = require("truyenviet/download_job")
+    local status = DownloadJob.status()
+    if not status then
+        return false
+    end
+    local dialog
+    dialog = ButtonDialog:new{
+        title = string.format(
+            "Đang tải nền \"%s\": %d/%d chương.\nMỗi lúc chỉ tải nền một truyện.",
+            tostring(status.title or ""),
+            status.done or 0,
+            status.total or 0
+        ),
+        buttons = {
+            {
+                {
+                    text = "Hủy tải nền",
+                    callback = function()
+                        UIManager:close(dialog)
+                        DownloadJob.cancel("cancelled")
+                    end,
+                },
+                {
+                    text = "Đóng",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    return true
+end
+
+-- Hộp hỏi gộp file như trước; đang đọc thì chỉ báo nhỏ để không cắt ngang.
+function Browser:onChaptersDownloaded(view, source, story, result, already_downloaded)
+    local view_visible = view and view.updateItems
+        and not view._truyenviet_closed and not view._truyenviet_hidden
+    if view_visible then
+        view:updateItems()
+    end
+    local total_count = result.downloaded + (already_downloaded or 0)
+
+    if isReading() then
+        local text = string.format("Đã tải xong %d chương: %s", result.downloaded, tostring(story.title or ""))
+        if #result.errors > 0 then
+            text = text .. string.format(" (lỗi %d chương)", #result.errors)
+        end
+        UIManager:show(Notification:new{ text = text })
+        return
+    end
+
+    local message = string.format(
+        "Đã hoàn tất tải %d chương mới (tổng %d chương).\n\nBạn có muốn GỘP CÁC CHƯƠNG THÀNH 1 FILE (EPUB/HTML) ngay bây giờ không?",
+        result.downloaded,
+        total_count
+    )
+    if #result.errors > 0 then
+        local shown = {}
+        for index = 1, math.min(#result.errors, 5) do
+            table.insert(shown, result.errors[index])
+        end
+        message = message
+            .. string.format("\n(Lỗi %d chương:\n%s)", #result.errors, table.concat(shown, "\n"))
+    end
+
+    local function refreshView()
+        if view and view.updateItems and not view._truyenviet_closed and not view._truyenviet_hidden then
+            view:updateItems()
+        end
+    end
+    UIManager:show(ConfirmBox:new{
+        title = "Truyện Việt - Hoàn Tất Tải Chương",
+        text = message,
+        ok_text = "Có, Gộp File Ngay",
+        cancel_text = "Để Sau",
+        ok_callback = function()
+            local item = {
+                source_id = source.id,
+                story_slug = Util.urlLeaf(story.url, Util.safeName(story.title, "story")),
+                chapter_count = total_count,
+            }
+            self:showMergeOptionsDialog(item, refreshView)
+        end,
+        cancel_callback = refreshView,
+    })
+end
+
+-- Tải trong tiến trình con: giao diện không bị chặn, đọc truyện khác được.
+-- Trả về false nếu không chạy nền được (người gọi dùng cách cũ).
+function Browser:startDownloadJob(view, source, story, chapters, already_downloaded)
+    local DownloadJob = require("truyenviet/download_job")
+    if not DownloadJob.isAvailable() then
+        return false
+    end
+    ChapterDownloader:cleanupPartials(source, story, chapters)
+
+    local title = tostring(story.title or "")
+    local indicator = FloatingProgress:new{
+        text = downloadJobText({ title = title, done = 0, total = #chapters }),
+    }
+    local function syncIndicator(status)
+        if not status then
+            indicator:hide()
+            return
+        end
+        indicator:setText(downloadJobText(status))
+        if isReading() then
+            indicator:hide()
+        else
+            indicator:show()
+        end
+    end
+
+    local started, reason = DownloadJob.start{
+        key = tostring(source.id) .. ":" .. tostring(story.url),
+        title = title,
+        total = #chapters,
+        progress_path = Storage:getDownloadProgressPath(),
+        task = function(report)
+            return ChapterDownloader:download(source, story, chapters, {
+                subprocess = true,
+                on_progress = report,
+            })
+        end,
+        cleanup = function()
+            ChapterDownloader:cleanupPartials(source, story, chapters)
+        end,
+        on_poll = syncIndicator,
+        on_done = function(ok, result, err)
+            indicator:hide()
+            if err == "exit" then
+                return
+            end
+            if not ok then
+                if err == "cancelled" then
+                    if view and view.updateItems and not view._truyenviet_closed and not view._truyenviet_hidden then
+                        view:updateItems()
+                    end
+                    UIManager:show(Notification:new{ text = "Đã hủy tải nền: " .. title })
+                else
+                    ChapterDownloader:cleanupPartials(source, story, chapters)
+                    showError("Lỗi tải nền: " .. tostring(err))
+                end
+                return
+            end
+            if type(result) ~= "table" then
+                showError("Lỗi tải chương không mong muốn")
+                return
+            end
+            result.errors = result.errors or {}
+            result.downloaded = result.downloaded or 0
+            if result.first_path and G_reader_settings and G_reader_settings.addDocument then
+                G_reader_settings:addDocument(result.first_path)
+                G_reader_settings:flush()
+            end
+            self:onChaptersDownloaded(view, source, story, result, already_downloaded)
+        end,
+    }
+    if not started then
+        if reason == "busy" then
+            self:showDownloadJobDialog()
+            return true
+        end
+        return false
+    end
+    syncIndicator(DownloadJob.status())
+    return true
+end
+
 function Browser:downloadChapters(
     view,
     page_data,
@@ -2871,54 +3073,26 @@ function Browser:downloadChapters(
     chapters,
     already_downloaded
 )
+    if self:showDownloadJobDialog() then
+        return
+    end
     local story = page_data.story
-    runOnline(function()
-        runInBackground(string.format("Tải %d chương...", #chapters), function()
-            return ChapterDownloader:download(source, story, chapters)
-        end, function(result)
-            if type(result) ~= "table" then
-                ChapterDownloader:cleanupPartials(source, story, chapters)
-                showError("Lỗi tải chương không mong muốn")
-                return
-            end
-
-            view:updateItems()
-            local total_count = result.downloaded + (already_downloaded or 0)
-            local message = string.format(
-                "Đã hoàn tất tải %d chương mới (tổng %d chương).\n\nBạn có muốn GỘP CÁC CHƯƠNG THÀNH 1 FILE (EPUB/HTML) ngay bây giờ không?",
-                result.downloaded,
-                total_count
-            )
-            if #result.errors > 0 then
-                local shown = {}
-                for index = 1, math.min(#result.errors, 5) do
-                    table.insert(shown, result.errors[index])
+    -- Không bọc Trapper: tiến trình con không được thừa hưởng coroutine nào.
+    NetworkMgr:runWhenOnline(function()
+        if self:startDownloadJob(view, source, story, chapters, already_downloaded) then
+            return
+        end
+        Trapper:wrap(function()
+            runInBackground(string.format("Tải %d chương...", #chapters), function()
+                return ChapterDownloader:download(source, story, chapters)
+            end, function(result)
+                if type(result) ~= "table" then
+                    ChapterDownloader:cleanupPartials(source, story, chapters)
+                    showError("Lỗi tải chương không mong muốn")
+                    return
                 end
-                message = message
-                    .. string.format("\n(Lỗi %d chương:\n%s)", #result.errors, table.concat(shown, "\n"))
-            end
-
-            local ConfirmBox = require("ui/widget/confirmbox")
-            UIManager:show(ConfirmBox:new{
-                title = "Truyện Việt - Hoàn Tất Tải Chương",
-                text = message,
-                ok_text = "Có, Gộp File Ngay",
-                cancel_text = "Để Sau",
-                ok_callback = function()
-                    local Util = require("truyenviet/helpers")
-                    local item = {
-                        source_id = source.id,
-                        story_slug = Util.urlLeaf(story.url, Util.safeName(story.title, "story")),
-                        chapter_count = total_count,
-                    }
-                    self:showMergeOptionsDialog(item, function()
-                        if view and view.updateItems then view:updateItems() end
-                    end)
-                end,
-                cancel_callback = function()
-                    if view and view.updateItems then view:updateItems() end
-                end,
-            })
+                self:onChaptersDownloaded(view, source, story, result, already_downloaded)
+            end)
         end)
     end)
 end
@@ -2936,6 +3110,9 @@ end
 
 -- chapters: toàn bộ chương của truyện, xếp từ cũ nhất đến mới nhất
 function Browser:showDownloadRangeDialog(view, page_data, source, chapters)
+    if self:showDownloadJobDialog() then
+        return
+    end
     local story = page_data.story
     local pending = ChapterDownloader:listPending(source, story, chapters)
     if #pending == 0 then

@@ -118,6 +118,36 @@ package.preload["truyenviet/storage"] = function()
     }
 end
 
+-- Việc tải nền giả: tiến độ do test đặt, subscriber gọi tay.
+local download_status
+local download_subscribers = {}
+local download_cancels = {}
+package.preload["truyenviet/download_job"] = function()
+    return {
+        status = function()
+            return download_status
+        end,
+        progressText = function()
+            return download_status and string.format("⤓ %d/%d", download_status.done, download_status.total)
+        end,
+        subscribe = function(callback)
+            download_subscribers[callback] = true
+        end,
+        unsubscribe = function(callback)
+            download_subscribers[callback] = nil
+        end,
+        cancel = function(reason)
+            table.insert(download_cancels, reason)
+        end,
+    }
+end
+local function notifyDownload(status)
+    download_status = status
+    for callback in pairs(download_subscribers) do
+        callback(status)
+    end
+end
+
 local Reader = require("truyenviet/reader")
 local tests_run = 0
 
@@ -345,5 +375,72 @@ assertEqual("ace-416.cbz", show_reader_path, "Switch opens the new chapter")
 queue = nil
 FileManager.instance = nil
 ReaderUI.instance = nil
+
+-- Tải nền: thanh trạng thái có "⤓ x/y" khi đang tải, gỡ khi xong hoặc đóng sách.
+local function footerText(footer)
+    local parts = {}
+    for _, content in ipairs(footer.contents) do
+        local value = content()
+        if value then
+            table.insert(parts, value)
+        end
+    end
+    return table.concat(parts, " | ")
+end
+local function newFooterUI()
+    local footer = { contents = {}, updates = 0 }
+    function footer:addAdditionalFooterContent(fn)
+        table.insert(self.contents, fn)
+    end
+    function footer:removeAdditionalFooterContent(fn)
+        for index, value in ipairs(self.contents) do
+            if value == fn then
+                table.remove(self.contents, index)
+                return
+            end
+        end
+    end
+    function footer:onUpdateFooter(force)
+        self.updates = self.updates + 1
+        self.forced = force
+    end
+    local ui = {
+        {},
+        menu = { registerToMainMenu = function() end },
+        view = { footer = footer, footer_visible = true },
+        document = { file = "/sdcard/Books/other.epub" },
+        registerPostInitCallback = function(_, callback)
+            callback()
+        end,
+    }
+    Reader:initializeFromReaderUI(ui)
+    return ui[2], footer
+end
+
+download_status = { done = 2, total = 10 }
+local listener, footer = newFooterUI()
+assertEqual("⤓ 2/10", footerText(footer), "Shows download progress when the book opens")
+notifyDownload({ done = 3, total = 10 })
+assertEqual("⤓ 3/10", footerText(footer), "Updates download progress")
+assertEqual(true, footer.forced, "Repaints a visible footer")
+local updates = footer.updates
+notifyDownload({ done = 3, total = 10 })
+assertEqual(updates, footer.updates, "Same progress does not repaint")
+notifyDownload(nil)
+assertEqual(0, #footer.contents, "Removes download progress when the job ends")
+notifyDownload({ done = 1, total = 4 })
+assertEqual("⤓ 1/4", footerText(footer), "A job started while reading shows up")
+listener.onCloseWidget()
+assertEqual(0, #footer.contents, "Closing the book removes download progress")
+assertEqual(nil, next(download_subscribers), "Closing the book unsubscribes")
+
+download_status = nil
+listener, footer = newFooterUI()
+assertEqual(0, #footer.contents, "No footer content without a download")
+listener.onExit()
+listener.onRestart()
+assertEqual("exit", download_cancels[1], "Exit cancels the background download")
+assertEqual("exit", download_cancels[2], "Restart cancels the background download")
+listener.onCloseWidget()
 
 print(string.format("Reader tests passed: %d assertions", tests_run))

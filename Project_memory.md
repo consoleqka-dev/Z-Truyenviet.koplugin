@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.17.8` (`BUILD-1391`) |
+| **Phiên bản hiện tại** | Codebase: `v3.18.0` (`BUILD-1392`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -253,6 +253,12 @@ flowchart TD
 - Máy để `start_with = "history"`: lúc khởi động KOReader mở `FileManager` rồi `history.booklist_menu` (một cửa sổ riêng), Truyện Việt mở đè lên. Khi mở chương, `ReaderUI:showReader` phát `ShowingReader`, chỉ `FileManager:onShowingReader` đóng trình duyệt file; Lịch sử không có handler nên còn lại. Mở sách từ chính Lịch sử thì KOReader gọi `close_callback` của danh sách trước (`filemanagerutil.openFile(..., self.close_callback)`); plugin gọi `showReader` trực tiếp nên bỏ qua bước này. Exit đóng reader xong vẫn còn Lịch sử, không có "No dialogs left to show". Gặp ngày 2026-10-22 sau khi cài BUILD-1390 (log plugin đã ghi "not reopening Truyện Việt").
 - Sửa: `Reader:show` (cả mở mới lẫn chuyển chương) gọi `closeBookLists()` trước `SetupShowReader`: với `FileManager.instance` và `ReaderUI.instance`, gọi `close_callback(true)` của `history.booklist_menu`, `collections.booklist_menu`, `collections.coll_list` nếu có (bọc `pcall`, ghi log số danh sách đã đóng). `coll_list.close_callback` cần `force_close` để đóng khi đang ở chế độ chọn.
 - Còn lại: nút "📖 Mở đọc ngay" sau khi tải Google Drive (`browser.lua`) gọi `ReaderUI:showReader` trực tiếp, chưa đi qua `Reader:show`.
+
+### 4.27. Tải chương trong tiến trình con (BUILD-1392)
+- Nguyên nhân đứng UI: `ChapterDownloader:download` chạy trong coroutine của `Trapper`, nhưng mỗi chương (HTTP đồng bộ, dựng EPUB/CBZ) chặn luồng chính; ô tiến độ `FloatingProgress` là cửa sổ thường cộng `bringToFront` nên nuốt mọi lần chạm; nó còn trong ngăn xếp cửa sổ nên `UIManager` không thoát khi Exit.
+- Sửa: `truyenviet/download_job.lua` fork bằng `ffiutil.runInSubProcess(fn, true)`; con gieo lại `math.random`, chạy `ChapterDownloader:download(..., { subprocess = true, on_progress })` (không yield, không ghi settings), ghi tiến độ vào `cache/download.progress` (ghi `.tmp` rồi rename), kết quả qua pipe bằng `string.buffer`. Cha thăm dò mỗi 1 s; `cancel` kill cả nhóm và dọn `.part` đồng bộ; treo 600 s thì tự hủy. Cha ghi `addDocument(first_path)`.
+- Ô tiến độ là toast (`toast = true`), ẩn khi có `ReaderUI.instance`; reader hiện `⤓ x/y` trên thanh trạng thái qua `addAdditionalFooterContent`. Exit/Restart (reader, `main.lua`, ô tiến độ) hủy việc và đóng ô.
+- Rủi ro chấp nhận: con thừa hưởng luồng copas của cha; cookie đổi trong con bị mất; `replaceFile` chép chéo thiết bị bị kill giữa chừng có thể để file dở.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
