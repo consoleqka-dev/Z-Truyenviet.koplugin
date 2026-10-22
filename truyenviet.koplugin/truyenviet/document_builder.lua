@@ -222,15 +222,9 @@ function DocumentBuilder:buildComic(source, story, chapter, payload, is_temp)
         local chapter_start = os.time()
         local chapter_timeout = source.id == "dualeo" and 120 or 300
 
-        local all_images = {}
-        if story and story.cover_url then
-            table.insert(all_images, { urls = { story.cover_url }, is_cover = true })
-        end
-        for _, img in ipairs(payload.images) do
-            table.insert(all_images, img)
-        end
-
-        for index, image in ipairs(all_images) do
+        -- Không chèn ảnh bìa truyện làm trang đầu: bìa từ nguồn thường chỉ là ảnh nhỏ
+        -- (TruyenQQ 190x247) nên bị phóng mờ khi KOReader hiển thị cả trang.
+        for index, image in ipairs(payload.images) do
             if os.time() - chapter_start > chapter_timeout then
                 has_error = true
                 archive_err = "Timeout downloading chapter after " .. tostring(chapter_timeout) .. "s"
@@ -286,15 +280,10 @@ function DocumentBuilder:buildComic(source, story, chapter, payload, is_temp)
                         downloaded_count = downloaded_count + 1
                     end
                 else
-                    if image.is_cover then
-                        archive:addFileFromMemory(string.format("%04d.png", index), "\137PNG\r\n\26\n\0\0\0\13IHDR\0\0\0\1\0\0\0\1\8\6\0\0\0\31\21\196\137\0\0\0\10IDATx\156c\0\1\0\0\5\0\1\13\10\2db\0\0\0\0IEND\174B`\130", os.time())
-                        downloaded_count = downloaded_count + 1
-                    else
-                        Debug.write("DocumentBuilder:buildComic unsupported/failed idx=" .. tostring(index) .. " final_url=" .. tostring(final_url) .. " last_error=" .. tostring(last_error))
-                        table.insert(failed_images, index)
-                        -- Use blank 1x1 PNG to prevent missing pages
-                        archive:addFileFromMemory(string.format("%04d.png", index), "\137PNG\r\n\26\n\0\0\0\13IHDR\0\0\0\1\0\0\0\1\8\6\0\0\0\31\21\196\137\0\0\0\10IDATx\156c\0\1\0\0\5\0\1\13\10\2db\0\0\0\0IEND\174B`\130", os.time())
-                    end
+                    Debug.write("DocumentBuilder:buildComic unsupported/failed idx=" .. tostring(index) .. " final_url=" .. tostring(final_url) .. " last_error=" .. tostring(last_error))
+                    table.insert(failed_images, index)
+                    -- Use blank 1x1 PNG to prevent missing pages
+                    archive:addFileFromMemory(string.format("%04d.png", index), "\137PNG\r\n\26\n\0\0\0\13IHDR\0\0\0\1\0\0\0\1\8\6\0\0\0\31\21\196\137\0\0\0\10IDATx\156c\0\1\0\0\5\0\1\13\10\2db\0\0\0\0IEND\174B`\130", os.time())
                 end
 
                 active_downloads = active_downloads - 1

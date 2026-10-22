@@ -6,17 +6,25 @@ package.path = table.concat({
 }, ";")
 
 local output_path = "/tmp/truyenviet-document-builder-test.html"
+local archive_entries = {}
+local requested_urls = {}
+local http_responses = {}
 
 package.preload["ffi/archiver"] = function()
     return {
         Writer = {
             new = function()
                 return {
-                    open = function()
+                    open = function(self, path)
+                        local file = io.open(path, "wb")
+                        if file then
+                            file:close()
+                        end
                         return true
                     end,
                     setZipCompression = function() end,
-                    addFileFromMemory = function()
+                    addFileFromMemory = function(self, name)
+                        table.insert(archive_entries, name)
                         return true
                     end,
                     close = function() end,
@@ -34,6 +42,10 @@ package.preload["truyenviet/http_client"] = function()
             }
         end,
         requestAsync = function(self, method, url, body, headers, options)
+            table.insert(requested_urls, url)
+            if http_responses[url] then
+                return http_responses[url], nil, {}
+            end
             return "<html>blocked</html>", nil, {
                 ["content-type"] = "text/html",
             }
@@ -160,6 +172,47 @@ assertEqual(
     tostring(comic_err):find("Lỗi", 1, true) ~= nil,
     "Reports invalid comic image"
 )
+
+os.remove(output_path)
+archive_entries = {}
+requested_urls = {}
+http_responses["https://example.test/page-1.jpg"] = "\255\216\255\224page"
+local cover_story = {
+    title = "Story",
+    cover_url = "https://example.test/cover.jpg",
+}
+local cover_comic_path = Builder:build(
+    { kind = "comic" },
+    cover_story,
+    chapter,
+    {
+        images = {
+            { urls = { "https://example.test/page-1.jpg" } },
+        },
+        referer = "https://example.test/",
+    },
+    true
+)
+assertEqual(output_path, cover_comic_path, "Builds comic chapter")
+assertEqual(1, #archive_entries, "Comic archive holds only chapter pages")
+assertEqual("0001.jpg", archive_entries[1], "First page is the chapter's first image")
+for _, url in ipairs(requested_urls) do
+    assertEqual(false, url == cover_story.cover_url, "Does not download story cover")
+end
+
+local failed_path = Builder:build(
+    { kind = "comic" },
+    cover_story,
+    chapter,
+    {
+        images = {
+            { urls = { "https://example.test/missing.jpg" } },
+        },
+        referer = "https://example.test/",
+    },
+    true
+)
+assertEqual(nil, failed_path, "Story cover does not mask failed chapter images")
 
 os.remove(output_path)
 os.remove(output_path .. ".part")
