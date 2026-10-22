@@ -13,6 +13,8 @@ local Reader = {
     on_next_chapter_callback = nil,
     on_prev_chapter_callback = nil,
     position = nil,
+    -- Mở tệp trọn bộ ở một chương: { path, page, number } chờ sách mở xong.
+    start_page = nil,
     -- Tăng mỗi lần mở chương; reader chỉ được kết thúc phiên của chính nó.
     session = 0,
 }
@@ -20,6 +22,31 @@ local Reader = {
 -- Ghi "Chương X/Y" cho file sắp mở; thanh trạng thái chỉ hiện khi đúng file đó.
 function Reader:setPosition(path, text)
     self.position = text and { path = path, text = text } or nil
+end
+
+-- Mở tệp trọn bộ: sau khi KOReader khôi phục trang đọc dở thì nhảy tới trang
+-- đầu chương number (page), trừ khi trang đọc dở đã nằm trong chương đó.
+function Reader:setStartPage(path, page, number)
+    self.start_page = path and page and { path = path, page = page, number = number } or nil
+end
+
+-- Trang hiện tại khi sách đang mở đúng là path; nil nếu không.
+function Reader:openBookPage(path)
+    local ui = ReaderUI.instance
+    local file = ui and ui.document and ui.document.file
+    if file and ChapterPosition.samePath(file, path) and type(ui.getCurrentPage) == "function" then
+        return ui:getCurrentPage()
+    end
+    return nil
+end
+
+-- Lật sách đang mở tới page; false khi sách đang mở không phải path.
+function Reader:gotoPageInOpenBook(path, page)
+    if not page or not self:openBookPage(path) then
+        return false
+    end
+    ReaderUI.instance:handleEvent(Event:new("GotoPage", page))
+    return true
 end
 
 -- Mở thẳng file trong thư mục tải của plugin (Lịch sử KOReader, trình duyệt
@@ -33,6 +60,11 @@ function Reader:positionText(file)
     local dir = ChapterPosition.downloadFolder(Storage:getRootDir(), file)
     local index = dir and Storage:getOfflineIndex(dir)
     if not index then
+        return nil
+    end
+    -- Tệp trọn bộ: KOReader đã hiện tên chương theo mục lục.
+    local name = type(file) == "string" and file:match("([^/]+)$")
+    if index.bundles and name and index.bundles[name] then
         return nil
     end
     local paths = {}
@@ -127,6 +159,29 @@ end
 
 function Reader:initializeFromReaderUI(ui)
     ui.menu:registerToMainMenu(self)
+
+    -- ReadSettings (khôi phục last_page) chạy trước PostReaderReady nên trang
+    -- nhảy tới ở đây không bị ghi đè.
+    if type(ui.registerPostReaderReadyCallback) == "function" then
+        ui:registerPostReaderReadyCallback(function()
+            local start = self.start_page
+            local file = ui.document and ui.document.file
+            if not start or not ChapterPosition.samePath(start.path, file) then
+                return
+            end
+            self.start_page = nil
+            local current = type(ui.getCurrentPage) == "function" and ui:getCurrentPage()
+            if start.number and current then
+                local Storage = require("truyenviet/storage")
+                if Storage:bundleChapterAt(file, current) == start.number then
+                    Debug.write("Reader: bundle reopened inside chapter " .. tostring(start.number) .. ", page kept")
+                    return
+                end
+            end
+            Debug.write("Reader: bundle jumps to page " .. tostring(start.page))
+            ui:handleEvent(Event:new("GotoPage", start.page))
+        end)
+    end
     
     ui:registerPostInitCallback(function()
         local listener = WidgetContainer:new({})

@@ -1,3 +1,18 @@
+## 3.18.1 (BUILD-1393) - 2026-10-23
+
+### Features & Improvements
+- **Nhận tệp trọn bộ**: một tệp truyện không có số chương trong tên nhưng có mục lục tự tạo trong `.sdr` (KOReader `handmade_toc`, ví dụ `Diamond-No-Ace-tron-bo.cbz`) được coi là chứa các chương "Chương X" trong mục lục.
+  - Tủ truyện đếm các chương này thay vì đếm tệp là một chương. Số chương đã tải vượt số chương mới nhất (do có chương lẻ 411.1, 411.2...) thì hiện `Đã tải hết`.
+  - Danh sách chương ghi `Đã tải` cho chương trong tệp trọn bộ. Tải hàng loạt, tải nền và tải trước bỏ qua các chương đó.
+  - Bấm chương mở tệp trọn bộ ở trang đầu chương. Nếu trang đọc dở đã nằm trong chương đó thì giữ nguyên trang. `Chương tiếp theo` / `Chương trước` lật trang ngay trong tệp đang mở, hết tệp thì sang chương online như cũ.
+  - `Xóa bản đã tải` và tự dọn chương cũ chỉ áp dụng cho file lẻ, không bao giờ đụng tệp trọn bộ.
+- Chương CBZ không còn chèn ảnh bìa nhỏ làm trang đầu (bị phóng mờ).
+
+### Tests
+- `spec/offline_chapters_test.lua`: đếm chương của tệp trọn bộ, tệp chỉ có một chương trong mục lục vẫn là file thường, đường dẫn và trang của chương, chương tại một trang, đọc lại mục lục khi sidecar đổi.
+- `spec/reader_test.lua`: nhảy trang sau khi KOReader khôi phục trang đọc dở, giữ trang đang đọc trong cùng chương, lật trang tại chỗ, không hiện vị trí theo thư mục cho tệp trọn bộ.
+- `spec/story_results_test.lua`: `Đã tải 412/412` và `Đã tải hết`.
+
 ## 3.18.0 (BUILD-1392) - 2026-10-22
 
 ### Features & Improvements

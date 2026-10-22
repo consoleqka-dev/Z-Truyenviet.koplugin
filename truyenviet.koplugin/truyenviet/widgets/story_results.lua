@@ -174,6 +174,10 @@ local function offlineText(story)
         total = tonumber(story.latest_chapter)
     end
     if total and total > 0 then
+        -- Chương lẻ (411.1, 411.2...) làm số chương đã tải vượt số chương mới nhất.
+        if downloaded > total then
+            return " · Đã tải hết"
+        end
         return string.format(" · Đã tải %d/%s", downloaded, numberLabel(total))
     end
     return string.format(" · Đã tải %d chương", downloaded)

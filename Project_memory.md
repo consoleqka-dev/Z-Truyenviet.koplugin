@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.18.0` (`BUILD-1392`) |
+| **Phiên bản hiện tại** | Codebase: `v3.18.1` (`BUILD-1393`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -259,6 +259,13 @@ flowchart TD
 - Sửa: `truyenviet/download_job.lua` fork bằng `ffiutil.runInSubProcess(fn, true)`; con gieo lại `math.random`, chạy `ChapterDownloader:download(..., { subprocess = true, on_progress })` (không yield, không ghi settings), ghi tiến độ vào `cache/download.progress` (ghi `.tmp` rồi rename), kết quả qua pipe bằng `string.buffer`. Cha thăm dò mỗi 1 s; `cancel` kill cả nhóm và dọn `.part` đồng bộ; treo 600 s thì tự hủy. Cha ghi `addDocument(first_path)`.
 - Ô tiến độ là toast (`toast = true`), ẩn khi có `ReaderUI.instance`; reader hiện `⤓ x/y` trên thanh trạng thái qua `addAdditionalFooterContent`. Exit/Restart (reader, `main.lua`, ô tiến độ) hủy việc và đóng ô.
 - Rủi ro chấp nhận: con thừa hưởng luồng copas của cha; cookie đổi trong con bị mất; `replaceFile` chép chéo thiết bị bị kill giữa chừng có thể để file dở.
+
+### 4.28. Tệp trọn bộ qua mục lục `.sdr` (BUILD-1393)
+- Bối cảnh: Diamond No Ace được gộp ngoài plugin thành `Diamond-No-Ace-tron-bo.cbz` (3,5 GB, 418 chương), mục lục ở `handmade_toc` trong `Diamond-No-Ace-tron-bo.sdr/metadata.cbz.lua`. Tủ truyện hiện `23/412` vì `getOfflineIndex` chỉ lấy số chương từ tên file.
+- `Storage.readHandmadeToc(path)` đọc mục lục qua `DocSettings:findSidecarFile`/`open` (pcall; không có `docsettings` thì như cũ). `getOfflineIndex` chỉ đọc cho file không có số chương trong tên. Mục lục có ≥2 chương có số thì file là tệp trọn bộ: `index.bundles[name]` = `{number, page}` theo trang, `index.bundle_by_number[n]` = `{file, page}`. Cache còn so thời điểm sửa sidecar.
+- `isDownloaded` = `hasChapterFile` (file lẻ) hoặc `getBundleChapter`. Xóa bản tải và tự dọn chỉ dùng `hasChapterFile`.
+- Mở chương: `Reader:setStartPage(path, page, number)`, nhảy bằng `GotoPage` trong `registerPostReaderReadyCallback` (chạy sau `ReadSettings` khôi phục `last_page`), bỏ qua nếu trang đọc dở thuộc đúng chương. Chương kế/trước tính từ `Storage:bundleChapterAt(path, ui:getCurrentPage())`; cùng tệp đang mở thì `Reader:gotoPageInOpenBook`.
+- Còn lại: Lịch sử chỉ ghi chương đã bấm, không ghi chương đang đọc trong tệp; plugin chưa tự gộp CBZ.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

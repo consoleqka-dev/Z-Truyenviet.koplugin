@@ -275,9 +275,60 @@ function Storage:getStoryDir(source, story)
     return story_dir
 end
 
--- Danh sách file truyện của một thư mục, nhóm theo số chương. Cache theo thời
--- điểm sửa thư mục nên thêm/xóa file là quét lại.
+-- Mục lục tự tạo (handmade_toc) KOReader lưu trong sidecar .sdr của một file.
+-- Trả về mục lục và đường dẫn sidecar; nil khi không có hoặc thiếu DocSettings.
+function Storage.readHandmadeToc(path)
+    local ok, DocSettings = pcall(require, "docsettings")
+    if not ok or type(DocSettings) ~= "table" or type(DocSettings.findSidecarFile) ~= "function" then
+        return nil
+    end
+    local found, sidecar = pcall(DocSettings.findSidecarFile, DocSettings, path)
+    if not found or type(sidecar) ~= "string" then
+        return nil
+    end
+    local read, toc = pcall(function()
+        return DocSettings:open(path):readSetting("handmade_toc")
+    end)
+    if not read or type(toc) ~= "table" then
+        return nil, sidecar
+    end
+    return toc, sidecar
+end
+
+-- Các chương có số trong mục lục, theo trang tăng dần; mỗi số chỉ lấy trang
+-- đầu tiên. Ít hơn 2 chương thì không coi là tệp trọn bộ.
+local function bundleChapters(toc)
+    local chapters, seen = {}, {}
+    for _, entry in ipairs(toc or {}) do
+        local page = type(entry) == "table" and tonumber(entry.page)
+        local number = page and Storage.chapterNumber(entry.title)
+        if number and not seen[number] then
+            seen[number] = true
+            table.insert(chapters, { number = number, page = page })
+        end
+    end
+    if #chapters < 2 then
+        return nil
+    end
+    table.sort(chapters, function(left, right)
+        return left.page < right.page
+    end)
+    return chapters
+end
+
+-- Danh sách file truyện của một thư mục, nhóm theo số chương. File không có số
+-- chương trong tên nhưng có mục lục tự tạo là tệp trọn bộ: các chương trong
+-- mục lục được tính là đã tải. Cache theo thời điểm sửa thư mục và sidecar.
 local offline_index_cache = {}
+
+local function sidecarsChanged(index)
+    for _, sidecar in pairs(index.sidecars) do
+        if lfs.attributes(sidecar.path, "modification") ~= sidecar.modified then
+            return true
+        end
+    end
+    return false
+end
 
 function Storage:getOfflineIndex(dir)
     local modified = type(dir) == "string" and lfs.attributes(dir, "modification")
@@ -285,7 +336,7 @@ function Storage:getOfflineIndex(dir)
         return nil
     end
     local cached = offline_index_cache[dir]
-    if cached and cached.modified == modified then
+    if cached and cached.modified == modified and not sidecarsChanged(cached) then
         return cached
     end
     local names = {}
@@ -300,34 +351,112 @@ function Storage:getOfflineIndex(dir)
     table.sort(names, function(left, right)
         return Util.naturalCompare(left, right)
     end)
-    local index = { modified = modified, files = names, by_number = {} }
+    local index = {
+        modified = modified,
+        files = names,
+        by_number = {},
+        bundles = {},
+        bundle_by_number = {},
+        sidecars = {},
+    }
     for _, name in ipairs(names) do
         local number = Storage.chapterNumber(name)
-        if number and not index.by_number[number] then
-            index.by_number[number] = name
+        if number then
+            if not index.by_number[number] then
+                index.by_number[number] = name
+            end
+        else
+            local toc, sidecar = Storage.readHandmadeToc(ffiutil.joinPath(dir, name))
+            if sidecar then
+                index.sidecars[name] = {
+                    path = sidecar,
+                    modified = lfs.attributes(sidecar, "modification"),
+                }
+            end
+            local chapters = bundleChapters(toc)
+            if chapters then
+                index.bundles[name] = chapters
+                for _, chapter in ipairs(chapters) do
+                    if not index.bundle_by_number[chapter.number] then
+                        index.bundle_by_number[chapter.number] = { file = name, page = chapter.page }
+                    end
+                end
+            end
         end
     end
     offline_index_cache[dir] = index
     return index
 end
 
--- Số chương khác nhau đã có file, gộp thư mục plugin và thư mục gắn ngoài.
+-- Số chương khác nhau đã có file (lẻ hoặc trong tệp trọn bộ), gộp thư mục
+-- plugin và thư mục gắn ngoài.
 function Storage:countOfflineChapters(story)
     local seen, count = {}, 0
+    local function mark(key)
+        if not seen[key] then
+            seen[key] = true
+            count = count + 1
+        end
+    end
     local function add(dir)
         local index = self:getOfflineIndex(dir)
         for _, name in ipairs(index and index.files or {}) do
-            local number = Storage.chapterNumber(name)
-            local key = number and ("#" .. tostring(number)) or name
-            if not seen[key] then
-                seen[key] = true
-                count = count + 1
+            local bundle = index.bundles[name]
+            if bundle then
+                for _, chapter in ipairs(bundle) do
+                    mark("#" .. tostring(chapter.number))
+                end
+            else
+                local number = Storage.chapterNumber(name)
+                mark(number and ("#" .. tostring(number)) or name)
             end
         end
     end
     add(self:getDownloadDir(story.source_id, story.url))
     add(self:getLinkedDir(story))
     return count
+end
+
+-- Số chương của một chương online: từ leaf URL, không có thì từ tiêu đề.
+function Storage.chapterNumberOf(chapter)
+    return Storage.chapterNumber(Util.urlLeaf(chapter.url, ""))
+        or Storage.chapterNumber(chapter.title)
+end
+local storyChapterNumber = Storage.chapterNumberOf
+
+-- Tệp trọn bộ chứa chương này: đường dẫn và trang đầu chương, hoặc nil.
+function Storage:getBundleChapter(source, story, chapter)
+    local number = storyChapterNumber(chapter)
+    if not number then
+        return nil
+    end
+    for _, dir in ipairs({ self:getDownloadDir(source.id, story.url), self:getLinkedDir(story) or false }) do
+        local index = dir and self:getOfflineIndex(dir)
+        local entry = index and index.bundle_by_number[number]
+        if entry then
+            return ffiutil.joinPath(dir, entry.file), entry.page
+        end
+    end
+    return nil
+end
+
+-- Số chương của tệp trọn bộ tại một trang (chương cuối có trang đầu <= page).
+function Storage:bundleChapterAt(path, page)
+    page = tonumber(page)
+    if type(path) ~= "string" or not page then
+        return nil
+    end
+    local dir, name = path:match("^(.*)/([^/]+)$")
+    local index = dir and self:getOfflineIndex(dir)
+    local chapters = index and index.bundles[name]
+    local number
+    for _, chapter in ipairs(chapters or {}) do
+        if chapter.page > page then
+            break
+        end
+        number = chapter.number
+    end
+    return number
 end
 
 local function chapterFileName(source, chapter)
@@ -349,8 +478,7 @@ function Storage:getChapterPath(source, story, chapter)
     if lfs.attributes(own_path, "mode") == "file" then
         return own_path
     end
-    local number = Storage.chapterNumber(Util.urlLeaf(chapter.url, ""))
-        or Storage.chapterNumber(chapter.title)
+    local number = storyChapterNumber(chapter)
     local index = number and self:getOfflineIndex(linked)
     if index and index.by_number[number] then
         return ffiutil.joinPath(linked, index.by_number[number])
@@ -362,8 +490,15 @@ function Storage:getChapterPath(source, story, chapter)
     return own_path
 end
 
-function Storage:isDownloaded(source, story, chapter)
+-- Chương có file riêng (lẻ) trên máy.
+function Storage:hasChapterFile(source, story, chapter)
     return lfs.attributes(self:getChapterPath(source, story, chapter), "mode") == "file"
+end
+
+-- Có file lẻ hoặc nằm trong tệp trọn bộ: không cần tải lại.
+function Storage:isDownloaded(source, story, chapter)
+    return self:hasChapterFile(source, story, chapter)
+        or self:getBundleChapter(source, story, chapter) ~= nil
 end
 
 -- Chỉ xóa file do plugin tải; file của người dùng trong thư mục gắn ngoài

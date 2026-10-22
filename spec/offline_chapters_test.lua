@@ -89,6 +89,27 @@ package.preload["util"] = function()
     }
 end
 
+-- Sidecar KOReader giả: đường dẫn sách -> { sidecar, toc }
+local sidecars = {}
+package.preload["docsettings"] = function()
+    local DocSettings = {}
+    function DocSettings:findSidecarFile(path)
+        local entry = sidecars[path]
+        return entry and entry.sidecar
+    end
+    function DocSettings:open(path)
+        local entry = sidecars[path] or {}
+        return {
+            readSetting = function(_, key)
+                if key == "handmade_toc" then
+                    return entry.toc
+                end
+            end,
+        }
+    end
+    return DocSettings
+end
+
 local real_remove = os.remove
 os.remove = function(path)
     if fs[path] then
@@ -210,6 +231,64 @@ assertEqual("/data/truyenviet/truyenqq/giant-killing/chapter-3.cbz",
     Storage:getChapterPath(source, other, { url = "https://truyenqq.com.vn/giant-killing/chapter-3" }),
     "Plugin path unchanged")
 assertEqual(0, Storage:countOfflineChapters(other), "Nothing downloaded")
+
+-- Tệp trọn bộ: file không có số chương nhưng có mục lục tự tạo trong .sdr
+local wc_source = { id = "weebcentral", kind = "comic" }
+local ace = { source_id = "weebcentral", url = "https://weebcentral.com/series/01J76/Diamond-No-Ace" }
+local ace_dir = "/data/truyenviet/weebcentral/Diamond-No-Ace"
+local bundle = ace_dir .. "/Diamond-No-Ace-tron-bo.cbz"
+local sidecar = ace_dir .. "/Diamond-No-Ace-tron-bo.sdr/metadata.cbz.lua"
+local function aceChapter(number)
+    local leaf = tostring(number):gsub("%.", "-")
+    return {
+        url = "https://weebcentral.com/chapters/01J8/chapter-" .. leaf,
+        title = "Chapter " .. tostring(number),
+    }
+end
+addDir("/data/truyenviet/weebcentral")
+addDir(ace_dir)
+addFile(ace_dir .. "/chapter-1.cbz")
+addFile(ace_dir .. "/chapter-411-2.cbz")
+addDir(ace_dir .. "/Diamond-No-Ace-tron-bo.sdr")
+fs[sidecar] = { mode = "file", modification = 1 }
+sidecars[bundle] = {
+    sidecar = sidecar,
+    toc = {
+        { depth = 1, page = 1, title = "Bìa" },
+        { depth = 1, page = 1, title = "Chương 1" },
+        { depth = 1, page = 30, title = "Chương 2" },
+        { depth = 1, page = 900, title = "Chương 411.1" },
+        { depth = 1, page = 920, title = "Chương 411.2" },
+        { depth = 1, page = 950, title = "Chương 412" },
+    },
+}
+addFile(bundle)
+-- Tập riêng chỉ có một chương trong mục lục: vẫn là một file thường
+local volume = ace_dir .. "/Ngoai-truyen.cbz"
+sidecars[volume] = { sidecar = ace_dir .. "/Ngoai-truyen.sdr/metadata.cbz.lua",
+    toc = { { depth = 1, page = 1, title = "Chương 0" } } }
+addFile(volume)
+
+assertEqual(6, Storage:countOfflineChapters(ace),
+    "Counts bundle chapters 1, 2, 411.1, 411.2, 412 and the plain volume, not the bundle file")
+assertEqual(true, Storage:isDownloaded(wc_source, ace, aceChapter(2)), "Bundled chapter is downloaded")
+assertEqual(false, Storage:hasChapterFile(wc_source, ace, aceChapter(2)), "Bundled chapter has no own file")
+assertEqual(true, Storage:hasChapterFile(wc_source, ace, aceChapter(411.2)), "Single file still found")
+assertEqual(false, Storage:isDownloaded(wc_source, ace, aceChapter(413)), "Chapter past the bundle is missing")
+local bundle_path, bundle_page = Storage:getBundleChapter(wc_source, ace, aceChapter(411.1))
+assertEqual(bundle, bundle_path, "Bundle path for a decimal chapter")
+assertEqual(900, bundle_page, "Bundle page for a decimal chapter")
+assertEqual(nil, Storage:getBundleChapter(wc_source, ace, aceChapter(413)), "No bundle page past the TOC")
+assertEqual(1, Storage:bundleChapterAt(bundle, 29), "Page before chapter 2 belongs to chapter 1")
+assertEqual(411.2, Storage:bundleChapterAt(bundle, 925), "Page inside chapter 411.2")
+assertEqual(412, Storage:bundleChapterAt(bundle, 5000), "Last pages belong to the last chapter")
+assertEqual(nil, Storage:bundleChapterAt(volume, 1), "Plain volume is not a bundle")
+
+-- Sửa mục lục (sidecar đổi) thì đếm lại dù thư mục không đổi
+table.insert(sidecars[bundle].toc, { depth = 1, page = 980, title = "Chương 413" })
+fs[sidecar].modification = 2
+assertEqual(7, Storage:countOfflineChapters(ace), "Edited TOC is read again")
+assertEqual(true, Storage:isDownloaded(wc_source, ace, aceChapter(413)), "New TOC chapter is downloaded")
 
 os.remove = real_remove
 print(string.format("Offline chapters tests passed: %d assertions", tests_run))

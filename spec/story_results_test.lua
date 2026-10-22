@@ -263,6 +263,16 @@ assertEqual(
     "Exact count is the total when known"
 )
 assertEqual(
+    "weebcentral · Chương 412 · Đã tải 412/412",
+    sourceText({ source_id = "weebcentral", latest_chapter = 412, offline_count = 412 }),
+    "Every chapter downloaded"
+)
+assertEqual(
+    "weebcentral · Chương 412 · Đã tải hết",
+    sourceText({ source_id = "weebcentral", latest_chapter = 412, offline_count = 418 }),
+    "Extra decimal chapters push the count past the latest chapter"
+)
+assertEqual(
     "zettruyen · Chương 12 · Chưa tải",
     sourceText({ source_id = "zettruyen", latest_chapter = 12, offline_count = 0 }),
     "Nothing downloaded"

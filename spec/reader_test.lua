@@ -7,8 +7,8 @@ package.path = table.concat({
 
 package.preload["ui/event"] = function()
     return {
-        new = function(_, name)
-            return { name = name }
+        new = function(_, name, ...)
+            return { name = name, args = { ... } }
         end,
     }
 end
@@ -106,6 +106,10 @@ local offline_dirs = {
     ["weebcentral/Diamond-No-Ace"] = {
         files = { "chapter-410.cbz", "chapter-411.cbz", "chapter-412.cbz" },
     },
+    ["weebcentral/Ace-Bundle"] = {
+        files = { "Ace-tron-bo.cbz", "chapter-1.cbz" },
+        bundles = { ["Ace-tron-bo.cbz"] = { { number = 1, page = 1 }, { number = 2, page = 30 } } },
+    },
 }
 package.preload["truyenviet/storage"] = function()
     return {
@@ -114,6 +118,9 @@ package.preload["truyenviet/storage"] = function()
         end,
         getOfflineIndex = function(_, dir)
             return offline_dirs[dir:match("([^/]+/[^/]+)$")]
+        end,
+        bundleChapterAt = function(_, _, page)
+            return page >= 30 and 2 or 1
         end,
     }
 end
@@ -231,6 +238,58 @@ assertEqual(nil, Reader:positionText(download_root .. "/weebcentral/Other-Story/
 Reader:setPosition(download_root .. "/weebcentral/Diamond-No-Ace/chapter-411.cbz", "Chương 411/412")
 assertEqual("Chương 411/412", Reader:positionText(download_root .. "/weebcentral/Diamond-No-Ace/chapter-411.cbz"),
     "Chapter list position wins over the download count")
+
+assertEqual(nil, Reader:positionText(download_root .. "/weebcentral/Ace-Bundle/Ace-tron-bo.cbz"),
+    "No folder position for a bundle file")
+
+-- Tệp trọn bộ: sau khi KOReader khôi phục trang đọc dở, nhảy tới trang đầu chương.
+local bundle_file = download_root .. "/weebcentral/Ace-Bundle/Ace-tron-bo.cbz"
+local function openBundleUI(last_page)
+    local ui = {
+        {},
+        menu = { registerToMainMenu = function() end },
+        registerPostInitCallback = function() end,
+        document = { file = bundle_file },
+        page = last_page,
+        events = {},
+    }
+    function ui:registerPostReaderReadyCallback(callback)
+        self.ready = callback
+    end
+    function ui:getCurrentPage()
+        return self.page
+    end
+    function ui:handleEvent(event)
+        table.insert(self.events, event)
+        if event.name == "GotoPage" then
+            self.page = event.args[1]
+        end
+    end
+    Reader:initializeFromReaderUI(ui)
+    ui.ready()
+    return ui
+end
+Reader:setStartPage(bundle_file, 30, 2)
+local bundle_ui = openBundleUI(5)
+assertEqual(30, bundle_ui.page, "Bundle jumps to the chapter's first page")
+assertEqual(nil, Reader.start_page, "Start page is used once")
+bundle_ui = openBundleUI(5)
+assertEqual(0, #bundle_ui.events, "Reopening the bundle without a chapter keeps the reading page")
+Reader:setStartPage(bundle_file, 30, 2)
+bundle_ui = openBundleUI(42)
+assertEqual(42, bundle_ui.page, "Reading page inside the chosen chapter is kept")
+Reader:setStartPage("/sdcard/other.cbz", 30, 2)
+bundle_ui = openBundleUI(5)
+assertEqual(0, #bundle_ui.events, "Start page of another book is ignored")
+Reader:setStartPage(nil)
+
+ReaderUI.instance = bundle_ui
+assertEqual(5, Reader:openBookPage(bundle_file), "Current page of the open bundle")
+assertEqual(nil, Reader:openBookPage("/sdcard/other.cbz"), "No page for a book that is not open")
+assertEqual(true, Reader:gotoPageInOpenBook(bundle_file, 30), "Turns the open bundle in place")
+assertEqual(30, bundle_ui.page, "In-place turn reaches the page")
+assertEqual(false, Reader:gotoPageInOpenBook("/sdcard/other.cbz", 1), "Other books are not turned")
+ReaderUI.instance = nil
 
 -- Opening a chapter from the plugin while another chapter is still open:
 -- the old reader closes after the new session started and must not end it.

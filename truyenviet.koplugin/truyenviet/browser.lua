@@ -3642,9 +3642,41 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
 
     local chapter_sort = page_data.chapter_sort
         or ChapterOrder.defaultMode(source)
+    -- Chương nằm trong tệp trọn bộ (mục lục tự tạo của KOReader): mở tệp đó.
+    local bundle_path, bundle_page
+    if not force then
+        bundle_path, bundle_page = Storage:getBundleChapter(source, story, chapter)
+    end
+    -- Đang đọc tệp trọn bộ: chương hiện tại là chương tại trang đang mở,
+    -- không phải chương đã bấm lúc đầu.
+    local function currentChapter()
+        local page = bundle_path and Reader:openBookPage(bundle_path)
+        if not page then
+            return chapter
+        end
+        local number = Storage:bundleChapterAt(bundle_path, page)
+        for _, item in ipairs(page_data.chapters) do
+            if number and Storage.chapterNumberOf(item) == number then
+                return item
+            end
+        end
+        return chapter
+    end
+    -- Chương đích cũng trong tệp trọn bộ đang mở: lật trang tại chỗ.
+    local function gotoInOpenBundle(target)
+        if not bundle_path or not target then
+            return false
+        end
+        local path, page = Storage:getBundleChapter(source, story, target)
+        if path ~= bundle_path or not Reader:gotoPageInOpenBook(path, page) then
+            return false
+        end
+        Storage:saveHistory(story, target)
+        return true
+    end
     -- Tìm lúc bấm chuyển chương: mục lục có thể vừa được làm mới nền.
     local function findNeighbors()
-        local i = ChapterPosition.indexOf(page_data.chapters, chapter)
+        local i = ChapterPosition.indexOf(page_data.chapters, currentChapter())
         if i then
             return page_data.chapters[
                 ChapterOrder.nextChapterIndex(chapter_sort, i)
@@ -3661,6 +3693,9 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         local next_chapter = findNeighbors()
         Debug.write("Browser:on_next_chapter triggered, next_chapter=" .. tostring(next_chapter ~= nil) .. ", from_reader=" .. tostring(from_reader_flag))
         UIManager:nextTick(function()
+            if gotoInOpenBundle(next_chapter) then
+                return
+            end
             if next_chapter then
                     if from_reader_flag then
                         -- Return to plugin UI first, then open next chapter from plugin context
@@ -3721,6 +3756,9 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         local _, prev_chapter = findNeighbors()
         Debug.write("Browser:on_prev_chapter triggered, prev_chapter=" .. tostring(prev_chapter ~= nil) .. ", from_reader=" .. tostring(from_reader_flag))
         UIManager:nextTick(function()
+            if gotoInOpenBundle(prev_chapter) then
+                return
+            end
             if prev_chapter then
                     if from_reader_flag then
                         Reader:returnToPlugin(function()
@@ -3774,6 +3812,18 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
                 end
             end)
         end
+
+    if bundle_path then
+        if view then UIManager:close(view) end
+        Storage:saveHistory(story, chapter)
+        Debug.write("Browser: chapter in bundle, opening " .. tostring(bundle_path) .. " at page " .. tostring(bundle_page))
+        Reader:setPosition(bundle_path, nil)
+        Reader:setStartPage(bundle_path, bundle_page, Storage.chapterNumberOf(chapter))
+        Reader:show(bundle_path, function()
+            self:showChapterList(page_data, source, on_return_callback)
+        end, on_next_chapter, from_reader, on_prev_chapter)
+        return
+    end
 
     local existing = Builder:getExistingPath(source, story, chapter)
     if existing and not force then
@@ -3849,7 +3899,8 @@ end
 
 function Browser:showChapterActions(view, page_data, source, chapter, on_return_callback)
     local story = page_data.story
-    local downloaded = Storage:isDownloaded(source, story, chapter)
+    -- Chỉ file lẻ mới xóa được; chương trong tệp trọn bộ giữ nguyên.
+    local downloaded = Storage:hasChapterFile(source, story, chapter)
     local dialog
     local buttons = {
         {
@@ -4886,7 +4937,7 @@ function Browser:triggerPrefetchAndPurge(source, story, page_data, current_chapt
         local p = curr_idx - newer_step * purge_dist
         while p >= 1 and p <= #page_data.chapters do
             local old_chap = page_data.chapters[p]
-            if old_chap and Storage:isDownloaded(source, story, old_chap) then
+            if old_chap and Storage:hasChapterFile(source, story, old_chap) then
                 Storage:removeDownload(source, story, old_chap)
                 Debug.write("[AutoPurge] Removed old chapter: " .. tostring(old_chap.title))
             end
