@@ -186,6 +186,12 @@ function Reader:initializeFromReaderUI(ui)
     ui:registerPostInitCallback(function()
         local listener = WidgetContainer:new({})
         local session = self.session
+        if self.on_return_callback then
+            local record_progress = require("truyenviet/reading_progress").observe(ui)
+            listener.onPageUpdate = record_progress
+            listener.onPosUpdate = record_progress
+            listener.onSaveSettings = record_progress
+        end
 
         local footer = ui.view and ui.view.footer
         local position_content

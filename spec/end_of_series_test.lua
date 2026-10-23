@@ -35,10 +35,14 @@ local function harness(options)
     end
     local storage = {}
     function storage.chapterNumberOf(chapter) return chapter.number end
+    function storage.chapterNumber(title) return tonumber(title:match("(%d+%.?%d*)")) end
     function storage:getBundleChapter(_, _, chapter)
         if options.bundle then return "/books/bundle.cbz", chapter.number * 10 end
     end
-    function storage:bundleChapterAt() return h.bundle_chapter end
+    function storage:bundleChapterAt(_, page)
+        if page >= 560 then return 56 end
+        if page >= 550 then return 55 end
+    end
     function storage:saveHistory(story, chapter)
         table.insert(h.history, { story = story, chapter = chapter })
     end
@@ -85,6 +89,7 @@ local function harness(options)
             ["truyenviet/reader"] = true, ["truyenviet/browser"] = true,
             ["truyenviet/chapter_order"] = true,
             ["truyenviet/chapter_position"] = true, ["truyenviet/version"] = true,
+            ["truyenviet/reading_progress"] = true,
         }
         assert(actual[name], "unexpected dependency: " .. name)
         local value = assert(loadfile(plugin_root .. "/" .. name .. ".lua"))()
@@ -98,11 +103,25 @@ local function harness(options)
         local ui = { document = { file = path }, view = {}, menu = {
             registerToMainMenu = function() end,
         } }
+        if options.bundle then
+            ui.document.info = { number_of_pages = 570 }
+            ui.doc_settings = { data = { handmade_toc = {
+                { title = "Chapter 55", page = 550 }, { title = "Chapter 56", page = 560 },
+            } } }
+            function ui.doc_settings:readSetting(key) return self.data[key] end
+            function ui.doc_settings:saveSetting(key, value) self.data[key] = value end
+        end
         function ui:getCurrentPage() return h.current_page or 1 end
-        function ui:registerPostReaderReadyCallback(callback) self.ready = callback end
+        function ui:registerPostReaderReadyCallback(callback)
+            self.ready = self.ready or {}
+            table.insert(self.ready, callback)
+        end
         function ui:registerPostInitCallback(callback) self.post_init = callback end
         function ui:handleEvent(event)
-            if event.name == "GotoPage" then h.current_page = event.value end
+            if event.name == "GotoPage" then
+                h.current_page = event.value
+                if self[2] and self[2].onPageUpdate then self[2].onPageUpdate() end
+            end
         end
         function ui:onClose()
             h.closes = h.closes + 1
@@ -113,7 +132,7 @@ local function harness(options)
         reader_ui.instance = ui
         h.reader:initializeFromReaderUI(ui)
         ui.post_init()
-        if ui.ready then ui.ready() end
+        for _, callback in ipairs(ui.ready or {}) do callback() end
         h.ui = ui
     end
     function h.browser:triggerPrefetchAndPurge() end
@@ -239,6 +258,17 @@ end)
 test("last chapter in an open bundle closes and returns", function()
     local h = harness({ bundle = true }); h:open(h.last)
     h:nextBeyondEnd(); h:drain(); h:assertReturned()
+end)
+test("reader records bundle progress after start-page restoration", function()
+    local h = harness({ bundle = true }); h:open(h.first)
+    local saved = h.ui.doc_settings.data.truyenviet_chapter_progress
+    equal(saved["55"], 0.1, "record requested chapter after jumping to its first page")
+    equal(saved["56"], nil, "do not record another chapter during restoration")
+    h.current_page = 554; h.ui[2].onPageUpdate()
+    equal(saved["55"], 0.5, "page updates record the active chapter")
+    h:nextBeyondEnd(); h:drain()
+    equal(saved["55"], 0.5, "jumping to next chapter preserves partial progress")
+    equal(saved["56"], 1 / 11, "new chapter has its own progress")
 end)
 test("explicit next-chapter menu at the end also returns", function()
     local h = harness(); h:open(h.last); h.reader.on_next_chapter_callback(false)

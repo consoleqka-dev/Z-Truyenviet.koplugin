@@ -166,6 +166,16 @@ package.preload["device"] = function()
         getHeight = function() return 800 end }) }
 end
 package.preload["logger"] = function() return stub() end
+package.preload["docsettings"] = function()
+    return {
+        findSidecarFile = function(_, path) return path .. ".sdr/metadata.lua" end,
+        open = function()
+            return { readSetting = function(_, key)
+                if key == "percent_finished" then return 0.42 end
+            end }
+        end,
+    }
+end
 for _, name in ipairs({
     "ui/widget/buttondialog", "ui/widget/confirmbox", "ui/widget/inputdialog",
     "ui/widget/notification", "ui/widget/textviewer",
@@ -270,6 +280,10 @@ check(view.item_table[1].dim == true, "đang lấy thì dòng trạng thái mờ
 check(not chapterItem(view, "Chương 5"), "chưa có chương mới khi chưa làm mới xong")
 
 -- Đang đọc chương cuối của danh sách lưu: chương kế tìm lúc bấm.
+Storage.isDownloaded = function() return true end
+check(chapterItem(view, "Chương 3").mandatory_func() == "Đã tải · 42%", "hiện tiến độ đọc cạnh trạng thái tải")
+Storage.isDownloaded = function() return false end
+check(chapterItem(view, "Chương 3").mandatory_func() == "", "chương chưa tải không hiện tiến độ giả")
 chapterItem(view, "Chương 3").callback()
 check(#reader_calls == 1, "mở chương đã tải bằng Reader")
 check(view._truyenviet_hidden, "mở chương thì view cũ được đánh dấu đã đóng")

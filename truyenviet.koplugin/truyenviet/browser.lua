@@ -22,6 +22,7 @@ local CoverCache = require("truyenviet/cover_cache")
 local CredentialManager = require("truyenviet/credential_manager")
 local LocalLibrary = require("truyenviet/local_library")
 local Reader = require("truyenviet/reader")
+local ReadingProgress = require("truyenviet/reading_progress")
 local SearchService = require("truyenviet/search_service")
 local SourceRegistry = require("truyenviet/source_registry")
 local Storage = require("truyenviet/storage")
@@ -3450,6 +3451,7 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
     local sort_mode = page_data.chapter_sort
         or ChapterOrder.defaultMode(source)
     local items = {}
+    local progress_cache = {}
     local status = refreshStatusText(page_data)
     if status then
         table.insert(items, {
@@ -3588,7 +3590,15 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
         table.insert(items, {
             text = current_chapter.title,
             mandatory_func = function()
-                return Storage:isDownloaded(source, story, current_chapter) and "Đã tải" or ""
+                if not Storage:isDownloaded(source, story, current_chapter) then return "" end
+                local path = Storage:getBundleChapter(source, story, current_chapter)
+                local chapter_number
+                if path then
+                    chapter_number = Storage.chapterNumberOf(current_chapter)
+                else
+                    path = Builder:getExistingPath(source, story, current_chapter)
+                end
+                return string.format("Đã tải · %d%%", ReadingProgress.percent(path, chapter_number, progress_cache))
             end,
             callback = function()
                 self:openChapter(page_data.view, page_data, source, current_chapter, on_return_callback)
