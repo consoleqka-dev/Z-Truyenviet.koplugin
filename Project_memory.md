@@ -267,6 +267,12 @@ flowchart TD
 - Mở chương: `Reader:setStartPage(path, page, number)`, nhảy bằng `GotoPage` trong `registerPostReaderReadyCallback` (chạy sau `ReadSettings` khôi phục `last_page`), bỏ qua nếu trang đọc dở thuộc đúng chương. Chương kế/trước tính từ `Storage:bundleChapterAt(path, ui:getCurrentPage())`; cùng tệp đang mở thì `Reader:gotoPageInOpenBook`.
 - Còn lại: Lịch sử chỉ ghi chương đã bấm, không ghi chương đang đọc trong tệp; plugin chưa tự gộp CBZ.
 
+### 4.29. Next ở cuối danh sách chương quay về mục lục
+- Nguyên nhân: `Browser:openChapter` nhận `onEndOfBook` đúng và không tìm thấy chương/trang mục lục tiếp theo, nhưng hai nhánh cuối chỉ hiện `lastChapterMessage`, để reader tiếp tục mở. Gặp ở Darwin Jihen chương 56; Back đang đặt `previous_location` nên chỉ tìm lịch sử nhảy vị trí trong sách.
+- Sửa: cả hai nhánh cuối gọi `Reader:returnToPlugin()`. Luồng sẵn có đóng `ReaderUI` rồi gọi callback `showChapterList(page_data, source, on_return_callback)` ở tick sau, giữ đúng bộ truyện và mục lục. Bỏ helper thông báo không còn dùng; không đổi cấu hình Back hoặc logic tải truyện.
+- Chỉ bấm Next vượt trang cuối mới đóng chương; đến trang cuối thôi vẫn giữ reader. Cờ `returning`/`active` hiện có chặn các lần quay về lặp; chương tiếp theo, trang mục lục tiếp theo và chương cùng tệp trọn bộ vẫn được ưu tiên.
+- Kiểm tra: `spec/end_of_series_test.lua` có 22 trường hợp trên LuaJIT/Lua 5.1; `spec/chapter_list_flow_test.lua` kiểm tra nhánh đang làm mới/ngoại tuyến. File `browser.lua` đã cài trên Poke3 và kiểm tra SHA-256 qua MTP; tương tác trên màn hình máy chưa được xác nhận.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

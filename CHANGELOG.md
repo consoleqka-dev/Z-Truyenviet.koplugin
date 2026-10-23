@@ -1,3 +1,12 @@
+## Unreleased
+
+### Bug Fixes
+- Bấm Next vượt trang cuối của chương cuối trong danh sách hiện có sẽ đóng reader và quay về danh sách chương của đúng bộ đó, thay vì chỉ hiện thông báo hết chương. Áp dụng cả khi mục lục đang làm mới hoặc ngoại tuyến; chuyển chương, phân trang và điều hướng trong tệp trọn bộ giữ nguyên.
+
+### Tests
+- `spec/end_of_series_test.lua`: 22 trường hợp chạy Browser/Reader thật với adapter KOReader, gồm đóng reader trước khi hiện mục lục, Next liên tiếp, danh sách tăng/giảm, phân trang, tệp trọn bộ và chương trước.
+- `spec/chapter_list_flow_test.lua`: cập nhật kỳ vọng quay về mục lục ở cuối danh sách đang làm mới/ngoại tuyến.
+
 ## 3.18.1 (BUILD-1393) - 2026-10-23
 
 ### Features & Improvements

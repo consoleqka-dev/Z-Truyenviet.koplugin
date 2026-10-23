@@ -2593,16 +2593,6 @@ local function refreshStatusText(page_data)
     end
 end
 
-local function lastChapterMessage(page_data)
-    local state = page_data.refresh_state
-    if state == "running" then
-        return "Đang lấy chương mới, thử lại sau giây lát."
-    elseif state == "failed" or state == "offline" then
-        return "Đã tới chương cuối trong danh sách đã lưu (chưa cập nhật được)."
-    end
-    return "Đã tới chương cuối cùng ở thời điểm hiện tại."
-end
-
 -- force_refresh: bỏ qua mục lục lưu, tải lại (có hộp chờ).
 function Browser:loadStoryPage(story, source, page, on_return_callback, auto_open_chapter, from_reader, chapter_sort, force_refresh)
     local started = preciseNow()
@@ -3739,14 +3729,11 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
                             )
                         end
                     else
-                        UIManager:show(InfoMessage:new{
-                        title = "Truyện Việt",
-                        text = lastChapterMessage(page_data) })
+                        -- Đóng chương rồi gọi lại danh sách đã lưu khi mở reader.
+                        Reader:returnToPlugin()
                     end
                 else
-                    UIManager:show(InfoMessage:new{
-                    title = "Truyện Việt",
-                    text = lastChapterMessage(page_data) })
+                    Reader:returnToPlugin()
                 end
             end)
         end

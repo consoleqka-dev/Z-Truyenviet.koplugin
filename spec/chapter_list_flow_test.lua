@@ -135,11 +135,15 @@ local Storage = stub({
 })
 
 local reader_calls = {}
+local reader_returns = 0
 local Reader = stub({
     show = function(_, path, on_return, on_next, from_reader, on_prev)
         table.insert(reader_calls, {
             path = path, on_return = on_return, on_next = on_next, on_prev = on_prev,
         })
+    end,
+    returnToPlugin = function()
+        reader_returns = reader_returns + 1
     end,
 })
 
@@ -270,10 +274,11 @@ chapterItem(view, "Chương 3").callback()
 check(#reader_calls == 1, "mở chương đã tải bằng Reader")
 check(view._truyenviet_hidden, "mở chương thì view cũ được đánh dấu đã đóng")
 local reading = reader_calls[1]
+local shown_before_end = #shown
 reading.on_next(false)
 flush()
-local message = shown[#shown]
-check(message.text == "Đang lấy chương mới, thử lại sau giây lát.", "hết chương khi đang làm mới: " .. tostring(message.text))
+check(reader_returns == 1, "hết danh sách đang làm mới thì đóng reader để quay về mục lục")
+check(#shown == shown_before_end, "không hiện hộp thông báo chặn trên chương cuối")
 
 -- Kết quả nền về (tiến trình con trả story bản sao).
 local result = jobs[1].task()
@@ -344,10 +349,11 @@ view = lastView()
 check(fetches == fetches_before and #jobs == jobs_before, "ngoại tuyến không tải")
 check(statusText(view):find("^Ngoại tuyến · danh sách lưu lúc "), "dòng trạng thái offline")
 chapterItem(view, "Chương 5").callback()
+shown_before_end = #shown
 reader_calls[#reader_calls].on_next(false)
 flush()
-check(shown[#shown].text == "Đã tới chương cuối trong danh sách đã lưu (chưa cập nhật được).",
-    "hết chương khi ngoại tuyến")
+check(reader_returns == 2, "hết danh sách ngoại tuyến thì quay về mục lục đã lưu")
+check(#shown == shown_before_end, "ngoại tuyến không hiện hộp thông báo chặn")
 online = true
 
 -- Danh sách truyện (vd. Lịch sử đọc): mục "Trên máy" không có trong
