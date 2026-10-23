@@ -10,7 +10,7 @@ end
 
 local function percentage(value)
     value = number(value)
-    return value and math.floor(math.max(0, math.min(1, value)) * 100 + 0.5) or 0
+    return value and math.floor(math.max(0, math.min(1, value)) * 100 + 0.5) or nil
 end
 
 local function chapters(toc)
@@ -66,14 +66,15 @@ end
 
 -- Cache chỉ sống cùng một danh sách: file gộp đọc metadata một lần, mở lại
 -- mục lục sẽ lấy tiến độ mới mà KOReader vừa lưu khi đóng reader.
+-- nil nghĩa là chưa có dữ liệu đọc, khác với tiến độ hợp lệ bằng 0%.
 function Progress.percent(path, chapter, cache)
-    if type(path) ~= "string" or path == "" then return 0 end
+    if type(path) ~= "string" or path == "" then return nil end
     local data = cache and cache[path]
     if data == nil then
         data = metadata(path) or false
         if cache then cache[path] = data end
     end
-    if not data then return 0 end
+    if not data then return nil end
     if not chapter then return percentage(data.percent) end
     local saved = type(data.chapter_progress) == "table" and data.chapter_progress
     local value = saved and (saved[tostring(chapter)] or saved[chapter])
@@ -82,7 +83,7 @@ function Progress.percent(path, chapter, cache)
     -- các chương trước đã đọc xong chỉ vì người dùng nhảy đến chương sau.
     data.entries = data.entries or chapters(data.toc)
     local current, percent = atPage(data.entries, number(data.page), number(data.total))
-    return current == tostring(chapter) and percentage(percent) or 0
+    return current == tostring(chapter) and percentage(percent) or nil
 end
 
 -- Ghi trong doc_settings đang mở, để KOReader tự flush cùng tiến độ chuẩn.

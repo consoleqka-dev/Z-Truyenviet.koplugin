@@ -111,7 +111,7 @@ mục lục thay vì tải quá nhiều chương manga liên tiếp.
 - Giữ tên chương để mở, tải lại hoặc xóa bản đã tải.
 - Trong trình đọc, mở menu và chọn `Quay lại Truyện Việt` để trở về danh sách chương.
 - Bấm Next vượt trang cuối của chương cuối trong danh sách hiện có sẽ đóng chương và quay về danh sách chương của bộ đó. Chỉ đến trang cuối thì chương vẫn mở.
-- Mỗi chương đã tải hiện thêm tiến độ đọc, ví dụ `Đã tải · 42%`; chưa mở hiện `0%`. Quay về mục lục sau khi đọc để thấy tiến độ mới. Với file gộp có mục lục chương, tiến độ được ghi riêng cho từng chương mở từ Truyện Việt; các chương bị nhảy qua không tự thành `100%`.
+- Mỗi chương đã tải hiện thêm tiến độ đọc, ví dụ `Đã tải · 42%`; chưa mở hoặc chưa có dữ liệu đọc hiện `Đã tải · -`. Tiến độ đã lưu bằng 0 hoặc làm tròn về 0 vẫn hiện `0%`. Quay về mục lục sau khi đọc để thấy tiến độ mới. Với file gộp có mục lục chương, tiến độ được ghi riêng cho từng chương mở từ Truyện Việt; các chương bị nhảy qua hiện `-`, không tự thành `100%`.
 
 Chương manga có thể chứa hàng trăm ảnh và tốn nhiều thời gian, dung lượng lưu trữ. Plugin ghi từng ảnh trực tiếp vào CBZ để hạn chế sử dụng RAM.
 

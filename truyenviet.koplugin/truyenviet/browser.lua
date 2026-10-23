@@ -3598,7 +3598,8 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
                 else
                     path = Builder:getExistingPath(source, story, current_chapter)
                 end
-                return string.format("Đã tải · %d%%", ReadingProgress.percent(path, chapter_number, progress_cache))
+                local percent = ReadingProgress.percent(path, chapter_number, progress_cache)
+                return percent ~= nil and string.format("Đã tải · %d%%", percent) or "Đã tải · -"
             end,
             callback = function()
                 self:openChapter(page_data.view, page_data, source, current_chapter, on_return_callback)

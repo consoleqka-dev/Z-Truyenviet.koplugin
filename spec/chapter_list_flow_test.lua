@@ -166,12 +166,13 @@ package.preload["device"] = function()
         getHeight = function() return 800 end }) }
 end
 package.preload["logger"] = function() return stub() end
+local metadata_exists, native_progress = true, 0.42
 package.preload["docsettings"] = function()
     return {
-        findSidecarFile = function(_, path) return path .. ".sdr/metadata.lua" end,
+        findSidecarFile = function(_, path) return metadata_exists and path .. ".sdr/metadata.lua" end,
         open = function()
             return { readSetting = function(_, key)
-                if key == "percent_finished" then return 0.42 end
+                if key == "percent_finished" then return native_progress end
             end }
         end,
     }
@@ -282,6 +283,21 @@ check(not chapterItem(view, "Chương 5"), "chưa có chương mới khi chưa l
 -- Đang đọc chương cuối của danh sách lưu: chương kế tìm lúc bấm.
 Storage.isDownloaded = function() return true end
 check(chapterItem(view, "Chương 3").mandatory_func() == "Đã tải · 42%", "hiện tiến độ đọc cạnh trạng thái tải")
+do
+    local function freshLabel()
+        local items = Browser:buildChapterItems({ story = story, chapters = chapterList(3),
+            page = 1, total_pages = 1 }, source, function() end)
+        return chapterItem({ item_table = items }, "Chương 3").mandatory_func()
+    end
+    metadata_exists = false
+    check(freshLabel() == "Đã tải · -", "chương chưa mở hiện dấu gạch ngang")
+    metadata_exists, native_progress = true, nil
+    check(freshLabel() == "Đã tải · -", "sidecar chưa có tiến độ không hiện phần trăm giả")
+    native_progress = 0
+    check(freshLabel() == "Đã tải · 0%", "tiến độ đọc hợp lệ bằng không vẫn hiện 0%")
+    native_progress = 0.42
+    check(freshLabel() == "Đã tải · 42%", "danh sách mới lấy tiến độ đọc sau khi mở chương")
+end
 Storage.isDownloaded = function() return false end
 check(chapterItem(view, "Chương 3").mandatory_func() == "", "chương chưa tải không hiện tiến độ giả")
 chapterItem(view, "Chương 3").callback()

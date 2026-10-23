@@ -1,3 +1,11 @@
+## 3.18.3 (BUILD-1395) - 2026-10-23
+
+### Features & Improvements
+- Chương đã tải nhưng chưa mở/chưa có dữ liệu đọc hiện `Đã tải · -` thay vì `0%`, gồm các chương chưa đọc trong tệp trọn bộ. Chương có tiến độ đã lưu bằng 0 hoặc làm tròn về 0 vẫn hiện `0%` để phân biệt với chương chưa mở.
+
+### Tests
+- Phân biệt dữ liệu đọc thiếu/hỏng với tiến độ 0 hợp lệ; giữ tiến độ riêng của chương trong tệp gộp và kiểm tra nhãn trên danh sách chương khi mở lại.
+
 ## 3.18.2 (BUILD-1394) - 2026-10-23
 
 ### Features & Improvements

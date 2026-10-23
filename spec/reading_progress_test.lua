@@ -24,18 +24,29 @@ records["chapter.cbz"] = { percent_finished = 0.426 }
 equal(Progress.percent("chapter.cbz"), 43, "round native CBZ progress")
 records["chapter.html"] = { percent_finished = 0.75 }
 equal(Progress.percent("chapter.html"), 75, "native text progress")
-equal(Progress.percent("unopened.cbz"), 0, "downloaded but unopened")
-equal(Progress.percent(nil), 0, "missing file")
+equal(Progress.percent("unopened.cbz"), nil, "downloaded but unopened")
+equal(Progress.percent(nil), nil, "missing file")
+records.empty = {}
+equal(Progress.percent("empty"), nil, "sidecar without reading progress")
+records.zero = { percent_finished = 0 }
+equal(Progress.percent("zero"), 0, "opened at zero progress is not unopened")
+records.zero.percent_finished = 0.001
+equal(Progress.percent("zero"), 0, "small saved progress rounding to zero stays numeric")
 records.bad = { percent_finished = "invalid" }
-equal(Progress.percent("bad"), 0, "invalid percentage")
+equal(Progress.percent("bad"), nil, "invalid percentage")
 records.bad.percent_finished = 0/0
-equal(Progress.percent("bad"), 0, "NaN percentage")
+equal(Progress.percent("bad"), nil, "NaN percentage")
 records.bad.percent_finished = 2
 equal(Progress.percent("bad"), 100, "clamp percentage")
 records.bad.percent_finished = -1
 equal(Progress.percent("bad"), 0, "clamp negative percentage")
 records.bad.broken = true
-equal(Progress.percent("bad"), 0, "corrupt sidecar does not break list")
+equal(Progress.percent("bad"), nil, "corrupt sidecar does not break list")
+local missing_cache = {}
+local missing_before = opens
+equal(Progress.percent("unopened.cbz", nil, missing_cache), nil)
+equal(Progress.percent("unopened.cbz", nil, missing_cache), nil)
+equal(opens, missing_before, "unopened metadata does not open a document")
 local cache, before = {}, opens
 equal(Progress.percent("chapter.cbz", nil, cache), 43)
 equal(Progress.percent("chapter.cbz", nil, cache), 43)
@@ -47,13 +58,15 @@ local toc = { { title = "Chapter 1", page = 1 }, { title = "Chapter 2", page = 1
     { title = "Chapter 3", page = 21 } }
 records.bundle = { handmade_toc = toc, last_page = 15, doc_pages = 30,
     percent_finished = 0.5 }
-equal(Progress.percent("bundle", 1), 0, "do not infer skipped chapters as completed")
+equal(Progress.percent("bundle", 1), nil, "do not infer skipped chapters as opened")
 equal(Progress.percent("bundle", 2), 50, "recover current chapter from native last page")
-equal(Progress.percent("bundle", 3), 0, "future chapter has no progress")
+equal(Progress.percent("bundle", 3), nil, "future chapter has no progress")
 records.bundle.truyenviet_chapter_progress = { ["1"] = 0.3, ["3"] = 1 }
 equal(Progress.percent("bundle", 1), 30, "independent saved chapter progress")
 equal(Progress.percent("bundle", 3), 100, "independent completed chapter")
-equal(Progress.percent("bundle", 99), 0, "unknown chapter")
+equal(Progress.percent("bundle", 99), nil, "unknown chapter")
+records.bundle.truyenviet_chapter_progress["1"] = 0
+equal(Progress.percent("bundle", 1), 0, "explicit bundle zero remains numeric")
 
 local ready, page, saves = nil, 1, 0
 local settings = { data = { handmade_toc = toc, doc_pages = 30 } }

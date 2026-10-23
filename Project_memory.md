@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.18.2` (`BUILD-1394`) |
+| **Phiên bản hiện tại** | Codebase: `v3.18.3` (`BUILD-1395`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -277,7 +277,7 @@ flowchart TD
 - `Browser:buildChapterItems` giữ trạng thái tải và thêm `Đã tải · N%`. `truyenviet/reading_progress.lua` đọc `percent_finished` từ `DocSettings` cho file lẻ. Chỉ đọc metadata, không mở renderer; cache theo đường dẫn trong một lần dựng danh sách để file gộp không bị đọc lặp cho từng hàng. Mở lại danh sách tạo cache mới.
 - KOReader chỉ lưu một vị trí đọc cuối cho file gộp, nên không thể coi các chương trước vị trí đó là đã đọc. `ReadingProgress.observe` gắn với phiên mở từ Truyện Việt, chờ `PostReaderReady` sau khi nhảy/khôi phục trang, rồi ghi các chương thực sự hiển thị qua `PageUpdate`/`PosUpdate`/`SaveSettings`. Khóa `truyenviet_chapter_progress` trong `doc_settings` là bảng `{[tostring(số_chương)] = tỷ_lệ_0_đến_1}`; KOReader tự flush cùng metadata chuẩn, không ghi file ở mỗi lần lật trang.
 - Phần trăm trong chương tính theo khoảng trang bắt đầu của chương đến trước chương sau; chương cuối dùng tổng số trang. Chương bỏ qua không bị tự đánh dấu xong. Metadata cũ không có bảng riêng chỉ phục hồi được chương chứa `last_page`; không suy diễn lịch sử đọc các chương khác.
-- Metadata thiếu/hỏng trả `0%` và không chặn mục lục. Trạng thái chương chưa tải giữ như cũ. Kiểm thử: `reading_progress_test`, `chapter_list_flow_test`, `reader_test`, `end_of_series_test` và `offline_chapters_test`.
+- Từ BUILD-1395, `ReadingProgress.percent` trả `nil` khi chưa có dữ liệu đọc hoặc metadata hỏng; browser hiện `Đã tải · -`. Tiến độ hợp lệ bằng 0 vẫn trả số 0 và hiện `0%`. Với tệp gộp, chương chưa được ghi và không chứa `last_page` hiện `-`; không dùng phần trăm toàn tệp cho chương đó. Trạng thái chương chưa tải giữ như cũ. Kiểm thử: `reading_progress_test`, `chapter_list_flow_test`, `reader_test`, `end_of_series_test` và `offline_chapters_test`.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
