@@ -5,7 +5,7 @@ local Util = require("truyenviet/helpers")
 local lfs = require("libs/libkoreader-lfs")
 
 -- "Thêm truyện trên máy vào Tủ truyện": quét thư mục plugin tải về và thư viện
--- sách (mặc định /sdcard/Books), ghép với truyện online, rồi trả danh sách để
+-- sách (mặc định /sdcard/Books, Kindle /mnt/us/documents, Kobo /mnt/onboard), ghép với truyện online, rồi trả danh sách để
 -- người dùng xác nhận. Chỉ thêm hoặc bổ sung offline_dir, không xóa gì.
 local LibraryImport = {
     skip_plugin_dirs = { cache = true, custom_sources = true },
@@ -13,7 +13,8 @@ local LibraryImport = {
         azw3 = true, cbr = true, cbz = true, djvu = true,
         epub = true, fb2 = true, mobi = true, pdf = true,
     },
-    default_library_dir = "/sdcard/Books",
+    -- Android, Kindle, Kobo; lấy thư mục đầu tiên có trên máy.
+    default_library_dirs = { "/sdcard/Books", "/mnt/us/documents", "/mnt/onboard" },
     max_depth = 3,
 }
 
@@ -341,7 +342,8 @@ function LibraryImport.apply(items)
     return records
 end
 
--- Thư mục thư viện: setting local_library_dirs, home_dir của KOReader, rồi /sdcard/Books.
+-- Thư mục thư viện: setting local_library_dirs, home_dir của KOReader, rồi thư mục
+-- mặc định đầu tiên có trên máy (không có cái nào thì vẫn trả /sdcard/Books).
 function LibraryImport.libraryDirs()
     local dirs = Storage.settings and Storage.settings:readSetting("local_library_dirs")
     if type(dirs) == "table" and #dirs > 0 then
@@ -351,7 +353,12 @@ function LibraryImport.libraryDirs()
     if type(home) == "string" and home ~= "" then
         return { home }
     end
-    return { LibraryImport.default_library_dir }
+    for _, dir in ipairs(LibraryImport.default_library_dirs) do
+        if lfs.attributes(dir, "mode") == "directory" then
+            return { dir }
+        end
+    end
+    return { LibraryImport.default_library_dirs[1] }
 end
 
 return LibraryImport

@@ -264,4 +264,38 @@ local again = LibraryImport.collect(context())
 assertEqual(1, #again.items, "Second run only offers the unselected file")
 assertEqual("UX Principles", again.items[1].record.title, "Unselected item offered again")
 
+-- Thư mục thư viện mặc định theo máy: Android, Kindle, Kobo
+local function libraryDir()
+    local dirs = LibraryImport.libraryDirs()
+    assertEqual(1, #dirs, "One default library dir")
+    return dirs[1]
+end
+assertEqual(books, libraryDir(), "Android uses /sdcard/Books")
+addDir("/mnt/us")
+addDir("/mnt/us/documents")
+assertEqual(books, libraryDir(), "/sdcard/Books wins when it exists")
+fs[books] = nil
+assertEqual("/mnt/us/documents", libraryDir(), "Kindle uses /mnt/us/documents")
+fs["/mnt/us/documents"] = nil
+addFile("/mnt/us/documents")
+addDir("/mnt/onboard")
+assertEqual("/mnt/onboard", libraryDir(), "A file named documents is not a library")
+fs["/mnt/us/documents"] = nil
+fs["/mnt/us"] = nil
+assertEqual("/mnt/onboard", libraryDir(), "Kobo uses /mnt/onboard")
+fs["/mnt/onboard"] = nil
+assertEqual(books, libraryDir(), "No known dir falls back to /sdcard/Books")
+
+addDir("/mnt/us/documents")
+G_reader_settings = { readSetting = function(_, key) return key == "home_dir" and "/mnt/us/manga" or nil end }
+assertEqual("/mnt/us/manga", libraryDir(), "KOReader home_dir wins over defaults")
+settings.data.local_library_dirs = { "/mnt/us/comics", "/mnt/us/documents" }
+local chosen = LibraryImport.libraryDirs()
+assertEqual(2, #chosen, "Setting keeps every dir")
+assertEqual("/mnt/us/comics", chosen[1], "Setting wins over home_dir")
+settings.data.local_library_dirs = nil
+G_reader_settings = nil
+assertEqual("/mnt/us/documents", libraryDir(), "Defaults return after settings are cleared")
+addDir(books)
+
 print(string.format("Library import tests passed: %d assertions", tests_run))

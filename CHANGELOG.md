@@ -1,3 +1,11 @@
+## 3.18.10 (BUILD-1402) - 2026-10-25
+
+### Bug Fixes
+- **"Thêm truyện trên máy" không thấy sách trên Kindle/Kobo**: khi chưa đặt thư mục thư viện và KOReader chưa có thư mục chính (home), plugin luôn quét `/sdcard/Books`, thư mục chỉ có trên Android. Giờ plugin quét thư mục đầu tiên có trên máy trong `/sdcard/Books`, `/mnt/us/documents` (Kindle), `/mnt/onboard` (Kobo). Thư mục đặt trong cài đặt và thư mục chính của KOReader vẫn được ưu tiên như trước.
+
+### Tests
+- `spec/library_import_test.lua`: chọn thư mục mặc định cho Android, Kindle, Kobo; `/sdcard/Books` thắng khi có; file trùng tên `documents` không tính; không có thư mục nào thì trả `/sdcard/Books`; cài đặt và `home_dir` vẫn được ưu tiên.
+
 ## 3.18.9 (BUILD-1401) - 2026-10-25
 
 ### Bug Fixes

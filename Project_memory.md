@@ -306,6 +306,9 @@ flowchart TD
 - `LocalLibrary.relocate(old, new)` so đường dẫn bằng `pathKey` (realpath, cả khi file đã mất thì dựng từ thư mục cha còn tồn tại, rồi quy `/storage/emulated/0` về `/sdcard`), vì đường dẫn khi dán đã qua realpath còn bản ghi dùng `/sdcard`. Sửa `url` (mục local), `offline_dir`, `cover_url` dạng `file://`, `chapter.url` của lịch sử; đổi tên mục chỉ khi tên đang bằng tên suy từ file cũ (`displayName`, bỏ đuôi, nguyên tên). Đổi tên file cache bìa theo `Util.stableHash(cover_url)` mới. Ghi qua `Storage:rewriteRecords(edit, edit_chapter)`: mỗi loại một lần lưu, bản dời thắng khi trùng khóa, lịch sử trùng thì giữ mục mới hơn.
 - `LocalLibrary.healMissing()` chạy đầu `showFavorites`/`showHistory`: ghi `partial_md5` (trường mới trong `favoriteRecord` và `KEPT_FAVORITE_FIELDS`) cho file local còn trên máy, rồi tìm mục file bị mất trong chính thư mục cũ: md5 trùng, hoặc đúng một file cùng đuôi có tên chứa tên kia như một cụm riêng (`containsName`, tối thiểu 3 ký tự). Bỏ qua file đã là mục khác. Dò thất bại được nhớ theo `modification` của thư mục; md5 lỗi được nhớ trong phiên.
 
+### 4.37. Thư mục thư viện mặc định cho Kindle/Kobo (BUILD-1402)
+- `LibraryImport.libraryDirs()`: setting `local_library_dirs` → `home_dir` của KOReader → thư mục đầu tiên là `directory` trong `LibraryImport.default_library_dirs` (`/sdcard/Books`, `/mnt/us/documents`, `/mnt/onboard`) → `/sdcard/Books`. Trường cũ `default_library_dir` đã bỏ. Kobo quét từ gốc `/mnt/onboard`; thư mục ẩn (`.kobo`, `.adds`) đã bị bỏ qua khi quét.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):
