@@ -384,12 +384,9 @@ function TruyenViet:onTruyenVietContinue()
         Browser:showRoot()
         return
     end
-    local function back()
+    Browser:confirmContinue(latest, nil, function()
         Browser:showRoot()
-    end
-    if not Browser:openHistoryItem(latest, back) then
-        Browser:showHistory(back)
-    end
+    end)
 end
 
 function TruyenViet:onTruyenVietHistory()

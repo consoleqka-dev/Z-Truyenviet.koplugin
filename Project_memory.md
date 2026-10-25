@@ -297,6 +297,10 @@ flowchart TD
 - `Storage.raiseLatestChapter(story, chapters)` chỉ tăng, chỉ khi story đã có `latest_chapter` > 0 (nguồn báo `N chương` không bị đổi định dạng). Được gọi ở: `loadStoryPage` (bản lưu và tải mới), `startRefresh`, `Storage:saveHistory` (kèm `updateFavorite` khi đổi), và bản sao hiển thị trong `showHistory`.
 - `StoryItem:getDetailText` đổi từ đầu `Chapter`/`Chap` thành `Chương` khi hiển thị; dữ liệu lưu giữ nguyên tên chương gốc.
 
+### 4.35. Hộp "Đọc tiếp" dùng chung, tìm bìa theo lựa chọn (BUILD-1400)
+- `Browser:openHistoryItem` với truyện online chỉ mở trang truyện (không chương). Muốn hỏi đọc tiếp thì gọi `Browser:confirmContinue(item, view, back, story)`: dùng ở `showHistory`, nút "▶ Tiếp tục" của `showRoot` và `main.lua` `onTruyenVietContinue` (view = nil, lỗi thì quay về `back`). `onTruyenVietBackToChapters` (về mục lục) vẫn dùng `openHistoryItem`.
+- Tìm bìa hàng loạt chỉ còn ở màn chọn nhiều của Tủ truyện (`selectFavoritesToRemove`, tiêu đề `Chọn truyện`) qua `Browser:findStoryCovers(stories, on_done)`; nút tìm bìa ở trang chủ và `findFavoriteCovers` đã bỏ. Truyện đã có bìa vẫn được tìm lại nếu được chọn.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

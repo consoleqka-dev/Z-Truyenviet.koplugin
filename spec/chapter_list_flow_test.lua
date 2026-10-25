@@ -449,6 +449,96 @@ do
     check(created.stories[2].reading_percent == nil, "chưa mở chương thì không hiện phần trăm")
     metadata_exists = true
     Storage.isDownloaded = function() return false end
+
+    -- Bấm truyện trong Lịch sử đọc: hỏi đọc tiếp, rồi mở đúng chương đọc cuối.
+    local loads = {}
+    local loadStoryPage = Browser.loadStoryPage
+    Browser.loadStoryPage = function(_, story, src, page, back, chapter)
+        table.insert(loads, { story = story, source = src, back = back, chapter = chapter })
+    end
+    local SourceRegistry = require("truyenviet/source_registry")
+    local web_source = { name = "Web" }
+    SourceRegistry.get = function(_, id)
+        if id == "web" then return web_source end
+    end
+    local history_view = created
+    created.story_callback(created.stories[2])
+    local box = lastView()
+    check(box.ok_text == "Đọc tiếp" and box.cancel_text == "Mục lục"
+        and box.text == "Đọc tiếp: Chapter 84?", "Lịch sử đọc hỏi đọc tiếp")
+    box.ok_callback()
+    flush()
+    check(history_view._closed_by_uimanager and #loads == 1 and loads[1].chapter.url == "c84"
+        and loads[1].story == created.stories[2], "Đọc tiếp mở chương đọc cuối")
+
+    -- Nút "Tiếp tục" ở trang chủ: cùng hộp hỏi, trang chủ chỉ đóng khi đã chọn.
+    local item = Storage.getHistory()[2]
+    local home = { name = "home" }
+    local homes = 0
+    Browser:confirmContinue(item, home, function() homes = homes + 1 end)
+    box = lastView()
+    check(box.ok_text == "Đọc tiếp" and not home._closed_by_uimanager, "Tiếp tục hỏi trước khi rời trang chủ")
+    box.cancel_callback()
+    flush()
+    check(home._closed_by_uimanager and #loads == 2 and loads[2].chapter == nil
+        and loads[2].story == item.story, "Mục lục mở danh sách chương")
+    loads[2].back()
+    check(homes == 1, "quay lại trang chủ")
+
+    -- Lệnh Tiếp tục đọc (không có cửa sổ): nguồn đã gỡ thì báo lỗi rồi về trang chủ.
+    local shown_count = #shown
+    Browser:confirmContinue({ story = { source_id = "removed", url = "/x" },
+        chapter = { title = "Chương 1", url = "x1" } }, nil, function() homes = homes + 1 end)
+    check(#shown == shown_count + 1 and #loads == 2, "nguồn đã gỡ thì báo lỗi")
+    Browser.loadStoryPage = loadStoryPage
+end
+
+-- Chọn nhiều trong Tủ truyện: tìm bìa lớn cho các truyện đã chọn.
+do
+    local LocalLibrary = require("truyenviet/local_library")
+    Menu.updateItems = function() end
+    local a = { source_id = "web", url = "/s/a", title = "A", cover_path = "/covers/a", cover_found = true }
+    local b = { source_id = "web", url = "/s/b", title = "B" }
+    local c = { source_id = "local", url = "/sdcard/c.pdf", title = "C", cover_path = "/covers/c" }
+    Storage.listFavorites = function() return { a, b, c } end
+    LocalLibrary.annotate = function(list) return list end
+    local searched, merged
+    LocalLibrary.findCovers = function(stories)
+        searched = stories
+        stories[1].cover_found = true
+        return stories
+    end
+    Storage.mergeFavorites = function(_, records) merged = records end
+    local removed = {}
+    local os_remove = os.remove
+    os.remove = function(path) table.insert(removed, path) end
+    local favorites_shown = 0
+    Browser.showFavorites = function() favorites_shown = favorites_shown + 1 end
+
+    Browser:selectFavoritesToRemove(function() end)
+    local view = lastView()
+    check(view.title == "Chọn truyện", "màn chọn nhiều không chỉ để xóa")
+    local cover_item = view.item_table[2]
+    check(cover_item.text == "Tìm ảnh bìa lớn cho 0 truyện đã chọn", "có action tìm bìa")
+    cover_item.callback()
+    check(searched == nil, "chưa chọn truyện nào thì không tìm")
+
+    view.item_table[4].callback() -- chọn A
+    view.item_table[6].callback() -- chọn C
+    check(cover_item.text == "Tìm ảnh bìa lớn cho 2 truyện đã chọn", "đếm truyện đã chọn")
+    online = false
+    cover_item.callback()
+    check(searched == nil, "ngoại tuyến thì không tìm")
+    online = true
+    cover_item.callback()
+    flush()
+    check(#searched == 2 and searched[1] == a and searched[2] == c, "chỉ tìm truyện đã chọn")
+    check(#removed == 1 and removed[1] == "/covers/a", "xóa bìa cũ của truyện online")
+    check(a.cover_path == nil and c.cover_path == nil and b.cover_path == nil, "bỏ đường dẫn bìa cũ")
+    check(merged == searched, "lưu kết quả vào Tủ truyện")
+    check(lastView().text == "Đã tìm được ảnh bìa cho 1/2 truyện.", "báo số bìa tìm được")
+    check(view._truyenviet_closed and favorites_shown == 1, "quay về Tủ truyện")
+    os.remove = os_remove
 end
 
 print(string.format("chapter_list_flow_test: %d checks passed", tests_run))

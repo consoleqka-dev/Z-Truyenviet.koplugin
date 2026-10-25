@@ -1,3 +1,15 @@
+## 3.18.8 (BUILD-1400) - 2026-10-25
+
+### Bug Fixes
+- **Nút "▶ Tiếp tục" ở trang chủ vào thẳng mục lục thay vì hỏi đọc tiếp**: nút này (và lệnh `Tiếp tục đọc`) gọi `openHistoryItem`, hàm này với truyện online chỉ mở trang truyện mà không truyền chương đọc cuối; hộp "Đọc tiếp: …?" chỉ có trong Lịch sử đọc. Hộp hỏi được tách thành `Browser:confirmContinue` và dùng chung cho Lịch sử đọc, nút Tiếp tục ở trang chủ và lệnh Tiếp tục đọc: `Đọc tiếp` mở đúng chương đọc cuối, `Mục lục` (hoặc `Danh sách tập` với thư mục trên máy) mở danh sách chương. Trang chủ chỉ đóng sau khi đã chọn.
+
+### Features & Improvements
+- **Tìm ảnh bìa lớn cho các truyện đã chọn**: màn chọn nhiều ở Tủ truyện (biểu tượng ✓, nay tên là `Chọn truyện`) thêm mục `Tìm ảnh bìa lớn cho N truyện đã chọn` cạnh `Xóa N truyện đã chọn`. Mục này bỏ bìa cũ như nút `Tìm lại ảnh bìa lớn` của từng truyện, tìm lại, lưu một lần, báo số bìa tìm được rồi quay về Tủ truyện.
+- Bỏ nút `Tìm lại bìa lớn cho Tủ truyện` ở trang chủ; dùng `Chọn tất cả` rồi `Tìm ảnh bìa lớn…` để làm việc tương tự.
+
+### Tests
+- `spec/chapter_list_flow_test.lua`: hộp đọc tiếp ở Lịch sử và trang chủ (mở chương đọc cuối, `Mục lục` mở danh sách chương, trang chủ chỉ đóng sau khi chọn), lỗi nguồn đã gỡ; tìm bìa cho truyện đã chọn (không chọn/ngoại tuyến thì không tìm, chỉ tìm truyện đã chọn, xóa bìa cũ của truyện online, lưu và quay về Tủ truyện).
+
 ## 3.18.7 (BUILD-1399) - 2026-10-25
 
 ### Bug Fixes

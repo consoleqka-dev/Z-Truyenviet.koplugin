@@ -710,10 +710,8 @@ function Browser:showRoot()
             text = "▶ Tiếp tục: " .. latest.story.title,
             mandatory = chapter_title and Util.shorten(chapter_title, 24) or nil,
             callback = function()
-                closeAndRun(view, function()
-                    if not self:openHistoryItem(latest, function() self:showRoot() end) then
-                        self:showHistory(function() self:showRoot() end)
-                    end
+                self:confirmContinue(latest, view, function()
+                    self:showRoot()
                 end)
             end,
         })
@@ -776,16 +774,6 @@ function Browser:showRoot()
             callback = function()
                 closeAndRun(view, function()
                     self:showLibraryImport(function()
-                        self:showRoot()
-                    end)
-                end)
-            end,
-        })
-        table.insert(items, {
-            text = "Tìm lại bìa lớn cho Tủ truyện",
-            callback = function()
-                closeAndRun(view, function()
-                    self:findFavoriteCovers(function()
                         self:showRoot()
                     end)
                 end)
@@ -1696,7 +1684,7 @@ function Browser:showFavorites(on_return_callback, focus_story)
         {
             favorites_only = true,
             focus_story = focus_story,
-            -- Chế độ chọn nhiều truyện để xóa.
+            -- Chế độ chọn nhiều truyện để xóa hoặc tìm bìa lớn.
             right_icon = "check",
             right_icon_tap_callback = function(view)
                 closeAndRun(view, function()
@@ -1707,13 +1695,13 @@ function Browser:showFavorites(on_return_callback, focus_story)
     )
 end
 
--- Chọn nhiều truyện (có "Chọn tất cả") rồi xóa khỏi Tủ truyện.
+-- Chọn nhiều truyện (có "Chọn tất cả") rồi xóa khỏi Tủ truyện hoặc tìm bìa lớn.
 function Browser:selectFavoritesToRemove(on_return_callback)
     local favorites = loadFavorites()
     local selected = {}
     local view
-    local delete_item, all_item = {}, {}
-    local menu_items = { delete_item, all_item }
+    local delete_item, cover_item, all_item = {}, {}, {}
+    local menu_items = { delete_item, cover_item, all_item }
 
     local function countSelected()
         local count = 0
@@ -1734,6 +1722,7 @@ function Browser:selectFavoritesToRemove(on_return_callback)
         end
         delete_item.text = string.format("Xóa %d truyện đã chọn", count)
         delete_item.mandatory = bytes > 0 and LocalLibrary.formatSize(bytes) or nil
+        cover_item.text = string.format("Tìm ảnh bìa lớn cho %d truyện đã chọn", count)
         all_item.text = count == #favorites and "Bỏ chọn tất cả" or "Chọn tất cả"
         for _, menu_item in ipairs(menu_items) do
             local story = menu_item.story
@@ -1750,17 +1739,29 @@ function Browser:selectFavoritesToRemove(on_return_callback)
         view:updateItems()
     end
 
-    delete_item.callback = function()
+    local function chosenStories()
         local chosen = {}
         for _, story in ipairs(favorites) do
             if selected[story] then
                 table.insert(chosen, story)
             end
         end
+        return chosen
+    end
+    delete_item.callback = function()
         -- Xóa xong thì quay về Tủ truyện (đọc lại danh sách).
-        confirmRemoveStories(chosen, function()
+        confirmRemoveStories(chosenStories(), function()
             view:onClose()
         end, function()
+            view:onClose()
+        end)
+    end
+    cover_item.callback = function()
+        local chosen = chosenStories()
+        if #chosen == 0 then
+            return
+        end
+        self:findStoryCovers(chosen, function()
             view:onClose()
         end)
     end
@@ -1780,7 +1781,7 @@ function Browser:selectFavoritesToRemove(on_return_callback)
         table.insert(menu_items, menu_item)
     end
     setTexts()
-    view = showView("Chọn truyện để xóa", menu_items, function()
+    view = showView("Chọn truyện", menu_items, function()
         self:showFavorites(on_return_callback)
     end)
 end
@@ -1909,32 +1910,22 @@ function Browser:showLocalEntryActions(story, view, reopen)
     UIManager:show(dialog)
 end
 
--- Tìm bìa lớn cho mọi mục Tủ truyện chưa có bìa tìm được.
-function Browser:findFavoriteCovers(on_return_callback)
+-- Tìm lại bìa lớn cho các truyện đã chọn, lưu một lần rồi gọi on_done.
+function Browser:findStoryCovers(stories, on_done)
     if not isOnline() then
-        showError("Cần kết nối mạng để tìm ảnh bìa.", on_return_callback)
+        showError("Cần kết nối mạng để tìm ảnh bìa.")
         return
     end
-    local favorites = loadFavorites()
-    local pending = {}
-    for _, story in ipairs(favorites) do
-        if not story.cover_found then
-            table.insert(pending, story)
+    -- Như nút "Tìm lại ảnh bìa lớn": bỏ bìa cũ để tải lại bìa tìm được.
+    for _, story in ipairs(stories) do
+        if story.cover_path and not LocalLibrary.isLocal(story) then
+            os.remove(story.cover_path)
         end
-    end
-    if #pending == 0 then
-        UIManager:show(InfoMessage:new{
-            title = "Truyện Việt",
-            text = "Mọi truyện trong Tủ truyện đã có ảnh bìa lớn.",
-        })
-        if on_return_callback then
-            UIManager:nextTick(on_return_callback)
-        end
-        return
+        story.cover_path = nil
     end
     local found = 0
-    withLoading(string.format("Đang tìm ảnh bìa cho %d truyện...", #pending), function()
-        local tried = LocalLibrary.findCovers(pending, SourceRegistry)
+    withLoading(string.format("Đang tìm ảnh bìa cho %d truyện...", #stories), function()
+        local tried = LocalLibrary.findCovers(stories, SourceRegistry)
         for _, story in ipairs(tried) do
             if story.cover_found then
                 found = found + 1
@@ -1944,9 +1935,11 @@ function Browser:findFavoriteCovers(on_return_callback)
     end)
     UIManager:show(InfoMessage:new{
         title = "Truyện Việt",
-        text = string.format("Đã tìm được ảnh bìa cho %d/%d truyện.", found, #pending),
+        text = string.format("Đã tìm được ảnh bìa cho %d/%d truyện.", found, #stories),
     })
-    self:showFavorites(on_return_callback)
+    if on_done then
+        on_done()
+    end
 end
 
 -- Quét truyện plugin đã tải và thư viện sách, cho người dùng bỏ chọn rồi thêm
@@ -2090,6 +2083,61 @@ function Browser:openHistoryItem(item, on_return_callback)
     return true
 end
 
+-- Hỏi "Đọc tiếp" chương đọc cuối của một mục Lịch sử đọc (Lịch sử đọc, nút
+-- "Tiếp tục" ở trang chủ và lệnh Tiếp tục đọc). Nút còn lại vào mục lục hoặc
+-- danh sách tập. view (có thể nil) chỉ đóng khi đã chọn; back là nơi quay về.
+-- story: bản sao đang hiển thị (mặc định item.story).
+function Browser:confirmContinue(item, view, back, story)
+    story = story or item.story
+    -- Không có cửa sổ nào đang mở thì báo lỗi xong quay về back.
+    local on_error = not view and back or nil
+    if LocalLibrary.isLocal(story) then
+        local kind = LocalLibrary.entryType(story.url)
+        if not kind then
+            showError("Không còn tìm thấy trên máy:\n" .. story.url, on_error)
+            return
+        end
+        UIManager:show(ConfirmBox:new{
+            title = "Truyện Việt",
+            text = "Đọc tiếp: " .. item.chapter.title .. "?",
+            ok_text = "Đọc tiếp",
+            cancel_text = kind == "dir" and "Danh sách tập" or "Hủy",
+            ok_callback = function()
+                closeAndRun(view, function()
+                    if not self:openHistoryItem(item, back) then
+                        back()
+                    end
+                end)
+            end,
+            cancel_callback = kind == "dir" and function()
+                self:openLocalEntry(story, view, back)
+            end or nil,
+        })
+        return
+    end
+    local source = SourceRegistry:get(story.source_id)
+    if not source then
+        showError("Nguồn truyện không còn khả dụng.", on_error)
+        return
+    end
+    UIManager:show(ConfirmBox:new{
+        title = "Truyện Việt",
+        text = "Đọc tiếp: " .. item.chapter.title .. "?",
+        ok_text = "Đọc tiếp",
+        cancel_text = "Mục lục",
+        ok_callback = function()
+            closeAndRun(view, function()
+                self:loadStoryPage(story, source, 1, back, item.chapter)
+            end)
+        end,
+        cancel_callback = function()
+            closeAndRun(view, function()
+                self:loadStoryPage(story, source, 1, back)
+            end)
+        end,
+    })
+end
+
 function Browser:showHistory(on_return_callback, focus_story)
     local history = Storage:getHistory()
     if #history == 0 then
@@ -2144,58 +2192,9 @@ function Browser:showHistory(on_return_callback, focus_story)
                 local item = history_by_url[
                     story.source_id .. "|" .. story.url
                 ]
-                local function reopen()
+                self:confirmContinue(item, view, function()
                     self:showHistory(on_return_callback, story)
-                end
-                if LocalLibrary.isLocal(story) then
-                    local kind = LocalLibrary.entryType(story.url)
-                    if not kind then
-                        showError("Không còn tìm thấy trên máy:\n" .. story.url)
-                        return
-                    end
-                    UIManager:show(ConfirmBox:new{
-                        title = "Truyện Việt",
-                        text = "Đọc tiếp: " .. item.chapter.title .. "?",
-                        ok_text = "Đọc tiếp",
-                        cancel_text = kind == "dir" and "Danh sách tập" or "Hủy",
-                        ok_callback = function()
-                            closeAndRun(view, function()
-                                if not self:openHistoryItem(item, reopen) then
-                                    reopen()
-                                end
-                            end)
-                        end,
-                        cancel_callback = kind == "dir" and function()
-                            self:openLocalEntry(story, view, reopen)
-                        end or nil,
-                    })
-                    return
-                end
-                local source = SourceRegistry:get(story.source_id)
-                if not source then
-                    showError("Nguồn truyện không còn khả dụng.")
-                    return
-                end
-                UIManager:show(ConfirmBox:new{
-            title = "Truyện Việt",
-            text = "Đọc tiếp: " .. item.chapter.title .. "?",
-                    ok_text = "Đọc tiếp",
-                    cancel_text = "Mục lục",
-                    ok_callback = function()
-                        closeAndRun(view, function()
-                            self:loadStoryPage(story, source, 1, function()
-                                self:showHistory(on_return_callback, story)
-                            end, item.chapter)
-                        end)
-                    end,
-                    cancel_callback = function()
-                        closeAndRun(view, function()
-                            self:loadStoryPage(story, source, 1, function()
-                                self:showHistory(on_return_callback, story)
-                            end)
-                        end)
-                    end,
-                })
+                end, story)
             end,
             on_story_hold = function(story, view)
                 UIManager:show(ConfirmBox:new{
