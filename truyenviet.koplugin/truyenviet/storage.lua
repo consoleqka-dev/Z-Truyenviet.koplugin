@@ -424,6 +424,28 @@ function Storage.chapterNumberOf(chapter)
 end
 local storyChapterNumber = Storage.chapterNumberOf
 
+-- "Chương N" mới nhất chỉ tăng theo chương thật đã thấy (mục lục vừa làm mới,
+-- chương đang đọc); không giảm và không tự đặt cho nguồn chỉ báo "N chương".
+-- Trả true khi đổi.
+function Storage.raiseLatestChapter(story, chapters)
+    local latest = tonumber(story.latest_chapter)
+    if not latest or latest <= 0 then
+        return false
+    end
+    local highest = latest
+    for _, chapter in ipairs(chapters or {}) do
+        local number = storyChapterNumber(chapter)
+        if number and number > highest then
+            highest = number
+        end
+    end
+    if highest == latest then
+        return false
+    end
+    story.latest_chapter = highest
+    return true
+end
+
 -- Tệp trọn bộ chứa chương này: đường dẫn và trang đầu chương, hoặc nil.
 function Storage:getBundleChapter(source, story, chapter)
     local number = storyChapterNumber(chapter)
@@ -736,6 +758,9 @@ function Storage:saveHistory(story, chapter)
     end
     if existing_idx then
         table.remove(history, existing_idx)
+    end
+    if Storage.raiseLatestChapter(story, { chapter }) then
+        self:updateFavorite(story)
     end
     
     local clean_story = favoriteRecord(story)

@@ -191,6 +191,21 @@ assertEqual("Vagabond v01", history[1].chapter.title, "Latest volume replaces th
 assertEqual(false, LocalLibrary.recordRead(books .. "/Other.pdf"), "Unrelated file is not recorded")
 assertEqual(2, #Storage:getHistory(), "History unchanged")
 
+-- Đọc chương mới hơn "Chương N" đã lưu: Lịch sử và Tủ truyện nâng số chương.
+local darwin = { source_id = "truyenqq", title = "Darwin Jihen", url = "https://q.test/darwin", latest_chapter = 56 }
+Storage:addFavorite(darwin)
+Storage:saveHistory(darwin, { title = "Chapter 57", url = "https://q.test/darwin/chap-57" })
+assertEqual(57, Storage:getHistory()[1].story.latest_chapter, "History raises latest chapter")
+assertEqual(57, Storage:getFavorites()["truyenqq|https://q.test/darwin"].latest_chapter,
+    "Favorite raises latest chapter")
+Storage:saveHistory(darwin, { title = "Chapter 3", url = "https://q.test/darwin/chap-3" })
+assertEqual(57, Storage:getHistory()[1].story.latest_chapter, "Older chapter never lowers it")
+local counted = { source_id = "truyenqq", title = "Count Only", url = "https://q.test/count", chapter_count = 56 }
+Storage:saveHistory(counted, { title = "Chapter 57", url = "https://q.test/count/chap-57" })
+assertEqual(nil, Storage:getHistory()[1].story.latest_chapter, "Count-only sources keep their format")
+assertEqual(false, Storage.raiseLatestChapter({ latest_chapter = 10 }, { { title = "Ngoại truyện", url = "x" } }),
+    "Chapters without a number are ignored")
+
 -- Dung lượng thư mục nhớ trong phiên
 local lfs_mock = require("libs/libkoreader-lfs")
 local real_dir = lfs_mock.dir

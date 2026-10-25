@@ -316,8 +316,12 @@ local child_story = {}
 for key, value in pairs(result.story) do child_story[key] = value end
 child_story.author = "Tác giả mới"
 result.story = child_story
+local raised
+Storage.raiseLatestChapter = function(target, chapters) raised = { story = target, chapters = chapters } end
 jobs[1].on_done(true, result)
 check(stale_story.author == "Tác giả mới", "chép thông tin truyện từ tiến trình con")
+check(raised and raised.story == stale_story and #raised.chapters == 5,
+    "làm mới nền nâng chương mới nhất theo mục lục mới")
 check(cache["src|https://a.test/a|1"].data.chapters[5] ~= nil, "lưu mục lục mới")
 check(favorite_updates == 2, "cập nhật Tủ truyện sau khi làm mới nền")
 check(view.switch_count == nil, "view đã đóng thì không dựng lại")
@@ -438,6 +442,8 @@ do
     check(stories[2].reading_chapter == "Chapter 84" and stories[2].reading_percent == 80,
         "chương online đã tải có tiến độ đọc")
     check(stories[3].reading_percent == nil, "chương chưa tải không có tiến độ giả")
+    check(raised and raised.chapters[1].title == "Chapter 2",
+        "Lịch sử nâng chương mới nhất theo chương đang đọc")
     metadata_exists = false
     Browser:showHistory(function() end)
     check(created.stories[2].reading_percent == nil, "chưa mở chương thì không hiện phần trăm")

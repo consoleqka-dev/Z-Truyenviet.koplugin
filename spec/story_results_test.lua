@@ -304,10 +304,15 @@ assertEqual("Đang đọc: Chương 205", detailText({ reading_chapter = "Chươ
 assertEqual("Dung lượng: 10 B", detailText({ size_bytes = 10 }), "Library shows size")
 assertEqual("Đang đọc: Tập 3", detailText({ reading_chapter = "Tập 3", size_bytes = 10 }),
     "Last chapter wins over size")
-assertEqual("Đang đọc: Chapter 84 · 80%", detailText({ reading_chapter = "Chapter 84", reading_percent = 80 }),
+assertEqual("Đang đọc: Chương 84 · 80%", detailText({ reading_chapter = "Chapter 84", reading_percent = 80 }),
     "History shows reading progress")
-assertEqual("Đang đọc: Chapter 1 · 0%", detailText({ reading_chapter = "Chapter 1", reading_percent = 0 }),
+assertEqual("Đang đọc: Chương 1 · 0%", detailText({ reading_chapter = "Chapter 1", reading_percent = 0 }),
     "Zero progress is still shown")
+assertEqual("Đang đọc: Chương 57: The End", detailText({ reading_chapter = "CHAPTER 57: The End" }),
+    "English chapter word becomes Chương")
+assertEqual("Đang đọc: Chương 12", detailText({ reading_chapter = "Chap 12" }), "Chap becomes Chương")
+assertEqual("Đang đọc: Chapterhouse 3", detailText({ reading_chapter = "Chapterhouse 3" }),
+    "Only the whole word is replaced")
 assertEqual(nil, detailText({ reading_chapter = "", reading_percent = 50 }), "Progress needs a chapter title")
 assertEqual(nil, detailText({ reading_chapter = "" }), "Empty chapter title shows nothing")
 assertEqual(nil, detailText({}), "Search results have no third line")

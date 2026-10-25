@@ -292,6 +292,11 @@ flowchart TD
 - `browser.lua` có hàm cục bộ `chapterPercent(source, story, chapter, cache)`, dùng chung cho nhãn mục lục và Lịch sử đọc. Chương trong tệp trọn bộ dùng `ReadingProgress.percent(path, số chương)`, chương lẻ dùng tiến độ của cả file.
 - `showHistory` gán `reading_percent` vào bản sao truyện, chỉ khi chương có trên máy (`Storage:isDownloaded`). Mục "Trên máy" đọc thẳng `item.chapter.url`. Cache metadata sống cùng một lần mở danh sách, nên mỗi file chỉ mở sidecar một lần.
 
+### 4.34. "Chương N" mới nhất theo chương thật đã thấy (BUILD-1399)
+- `latest_chapter` vốn chỉ đến từ meta tìm kiếm/nguồn (`SearchService.applyMeta`, `fetchSearchMeta`). Mục lục làm mới và lịch sử chụp lại story nên giữ số cũ, ví dụ Darwin Jihen hiện `Chương 56` dù đang đọc 57.
+- `Storage.raiseLatestChapter(story, chapters)` chỉ tăng, chỉ khi story đã có `latest_chapter` > 0 (nguồn báo `N chương` không bị đổi định dạng). Được gọi ở: `loadStoryPage` (bản lưu và tải mới), `startRefresh`, `Storage:saveHistory` (kèm `updateFavorite` khi đổi), và bản sao hiển thị trong `showHistory`.
+- `StoryItem:getDetailText` đổi từ đầu `Chapter`/`Chap` thành `Chương` khi hiển thị; dữ liệu lưu giữ nguyên tên chương gốc.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

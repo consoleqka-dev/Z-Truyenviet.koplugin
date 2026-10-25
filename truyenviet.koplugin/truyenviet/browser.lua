@@ -2118,6 +2118,8 @@ function Browser:showHistory(on_return_callback, focus_story)
             story[key] = value
         end
         story.reading_chapter = item.chapter.title
+        -- Mục lưu trước khi số chương được nâng theo chương đang đọc.
+        Storage.raiseLatestChapter(story, { item.chapter })
         if LocalLibrary.isLocal(story) then
             story.reading_percent = ReadingProgress.percent(item.chapter.url, nil, progress_cache)
         else
@@ -2650,6 +2652,7 @@ function Browser:loadStoryPage(story, source, page, on_return_callback, auto_ope
     end
     if cached then
         fillStory(story, cached.story)
+        Storage.raiseLatestChapter(story, cached.chapters)
         local page_data = {
             story = story,
             page = page,
@@ -2706,6 +2709,7 @@ function Browser:loadStoryPage(story, source, page, on_return_callback, auto_ope
             page_data.new_count = ChapterCache.newChapterCount(previous.chapters, page_data.chapters)
         end
         ChapterOrder.apply(page_data, source, sort_mode)
+        Storage.raiseLatestChapter(page_data.story, page_data.chapters)
         Storage:updateFavorite(page_data.story)
         present(page_data)
     end)
@@ -2737,6 +2741,7 @@ function Browser:startRefresh(page_data, source, on_return_callback)
 
         ChapterCache.put(source.id, story.url, page, result)
         copyStory(story, result.story)
+        Storage.raiseLatestChapter(story, result.chapters)
         Storage:updateFavorite(story)
         page_data.new_count = ChapterCache.newChapterCount(page_data.chapters, result.chapters)
         page_data.chapters = result.chapters

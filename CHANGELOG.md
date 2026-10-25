@@ -1,3 +1,16 @@
+## 3.18.7 (BUILD-1399) - 2026-10-25
+
+### Bug Fixes
+- **Số chương mới nhất không tăng khi có chương mới**: đọc hết chương 56, bấm sang chương sau và plugin tải chương 57 vừa ra, nhưng Lịch sử đọc vẫn hiện `Chương 56`. Nguyên nhân: `latest_chapter` chỉ lấy từ dữ liệu tìm kiếm/nguồn, mục lục làm mới không nâng nó. Giờ `Storage.raiseLatestChapter` nâng số này theo chương lớn nhất trong mục lục (mở từ bản lưu, tải mới, làm mới nền) và theo chương đang đọc khi ghi Lịch sử. Tủ truyện được cập nhật cùng. Số chỉ tăng, không giảm; nguồn chỉ báo `N chương` giữ nguyên định dạng. Mục Lịch sử lưu từ trước cũng hiện đúng ngay khi mở.
+
+### Features & Improvements
+- Dòng `Đang đọc` đổi `Chapter`/`Chap` ở đầu tên chương thành `Chương`, ví dụ `Đang đọc: Chương 57 · 80%`.
+
+### Tests
+- `spec/local_history_size_test.lua`: nâng số chương ở Lịch sử và Tủ truyện, không giảm khi đọc chương cũ, bỏ qua nguồn chỉ có tổng số chương và chương không có số.
+- `spec/chapter_list_flow_test.lua`: làm mới nền và màn Lịch sử gọi nâng số chương.
+- `spec/story_results_test.lua`: đổi `Chapter`/`Chap` thành `Chương`, chỉ thay nguyên từ.
+
 ## 3.18.6 (BUILD-1398) - 2026-10-25
 
 ### Features & Improvements

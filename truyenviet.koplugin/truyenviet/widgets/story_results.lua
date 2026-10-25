@@ -210,9 +210,22 @@ end
 
 -- Dòng 3: chương đọc cuối ở Lịch sử đọc (reading_chapter), dung lượng file
 -- trên máy ở Tủ truyện (size_bytes do annotate tính).
+-- Tên chương nguồn tiếng Anh ("Chapter 57") đọc là "Chương 57", đồng bộ với
+-- "Chương N" ở dòng nguồn.
+local function chapterLabel(title)
+    local lower = title:lower()
+    for _, word in ipairs({ "chapter", "chap" }) do
+        if lower:sub(1, #word) == word and not lower:sub(#word + 1, #word + 1):match("%a") then
+            return "Chương" .. title:sub(#word + 1)
+        end
+    end
+    return title
+end
+
 function StoryItem:getDetailText()
     local reading = self.story.reading_chapter
     if type(reading) == "string" and reading ~= "" then
+        reading = chapterLabel(reading)
         local percent = tonumber(self.story.reading_percent)
         if percent then
             return string.format("Đang đọc: %s · %d%%", reading, percent)
