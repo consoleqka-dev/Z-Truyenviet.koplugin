@@ -13,7 +13,8 @@ local Reader = {
     on_next_chapter_callback = nil,
     on_prev_chapter_callback = nil,
     position = nil,
-    -- Mở tệp trọn bộ ở một chương: { path, page, number } chờ sách mở xong.
+    -- Mở tệp trọn bộ ở một chương: { path, page, number, on_chapter } chờ
+    -- sách mở xong.
     start_page = nil,
     -- Tăng mỗi lần mở chương; reader chỉ được kết thúc phiên của chính nó.
     session = 0,
@@ -26,8 +27,11 @@ end
 
 -- Mở tệp trọn bộ: sau khi KOReader khôi phục trang đọc dở thì nhảy tới trang
 -- đầu chương number (page), trừ khi trang đọc dở đã nằm trong chương đó.
-function Reader:setStartPage(path, page, number)
-    self.start_page = path and page and { path = path, page = page, number = number } or nil
+-- on_chapter(number) chạy mỗi khi lật sang chương khác trong tệp này.
+function Reader:setStartPage(path, page, number, on_chapter)
+    self.start_page = path and page and {
+        path = path, page = page, number = number, on_chapter = on_chapter,
+    } or nil
 end
 
 -- Trang hiện tại khi sách đang mở đúng là path; nil nếu không.
@@ -160,6 +164,25 @@ end
 function Reader:initializeFromReaderUI(ui)
     ui.menu:registerToMainMenu(self)
 
+    -- Tệp trọn bộ mở từ danh sách chương: { file, number, callback } để báo
+    -- chương đang đọc mỗi lần lật sang chương khác.
+    local chapter_watch
+    local function followBundleChapter()
+        local page = chapter_watch and type(ui.getCurrentPage) == "function" and ui:getCurrentPage()
+        if not page then
+            return
+        end
+        local Storage = require("truyenviet/storage")
+        local number = Storage:bundleChapterAt(chapter_watch.file, page)
+        if number and number ~= chapter_watch.number then
+            chapter_watch.number = number
+            local ok, err = pcall(chapter_watch.callback, number)
+            if not ok then
+                Debug.write("Reader: bundle chapter callback failed: " .. tostring(err))
+            end
+        end
+    end
+
     -- ReadSettings (khôi phục last_page) chạy trước PostReaderReady nên trang
     -- nhảy tới ở đây không bị ghi đè.
     if type(ui.registerPostReaderReadyCallback) == "function" then
@@ -170,6 +193,9 @@ function Reader:initializeFromReaderUI(ui)
                 return
             end
             self.start_page = nil
+            if type(start.on_chapter) == "function" and start.number then
+                chapter_watch = { file = file, number = start.number, callback = start.on_chapter }
+            end
             local current = type(ui.getCurrentPage) == "function" and ui:getCurrentPage()
             if start.number and current then
                 local Storage = require("truyenviet/storage")
@@ -180,17 +206,24 @@ function Reader:initializeFromReaderUI(ui)
             end
             Debug.write("Reader: bundle jumps to page " .. tostring(start.page))
             ui:handleEvent(Event:new("GotoPage", start.page))
+            followBundleChapter()
         end)
     end
     
     ui:registerPostInitCallback(function()
         local listener = WidgetContainer:new({})
         local session = self.session
+        local record_progress
         if self.on_return_callback then
-            local record_progress = require("truyenviet/reading_progress").observe(ui)
-            listener.onPageUpdate = record_progress
+            record_progress = require("truyenviet/reading_progress").observe(ui)
             listener.onPosUpdate = record_progress
             listener.onSaveSettings = record_progress
+        end
+        listener.onPageUpdate = function(...)
+            if record_progress then
+                record_progress(...)
+            end
+            followBundleChapter()
         end
 
         local footer = ui.view and ui.view.footer

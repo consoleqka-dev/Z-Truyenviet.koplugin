@@ -2101,8 +2101,14 @@ function Browser:showHistory(on_return_callback, focus_story)
     local history_by_url = {}
     
     for _, item in ipairs(history) do
-        table.insert(stories, item.story)
-        history_by_url[item.story.source_id .. "|" .. item.story.url] = item
+        -- Bản sao để hiện chương đọc cuối mà không ghi thêm trường vào lịch sử.
+        local story = {}
+        for key, value in pairs(item.story) do
+            story[key] = value
+        end
+        story.reading_chapter = item.chapter.title
+        table.insert(stories, story)
+        history_by_url[story.source_id .. "|" .. story.url] = item
     end
     LocalLibrary.copyFavoriteCovers(stories, Storage:listFavorites())
 
@@ -3648,6 +3654,14 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
     if not force then
         bundle_path, bundle_page = Storage:getBundleChapter(source, story, chapter)
     end
+    local function chapterByNumber(number)
+        for _, item in ipairs(page_data.chapters) do
+            if number and Storage.chapterNumberOf(item) == number then
+                return item
+            end
+        end
+        return nil
+    end
     -- Đang đọc tệp trọn bộ: chương hiện tại là chương tại trang đang mở,
     -- không phải chương đã bấm lúc đầu.
     local function currentChapter()
@@ -3655,13 +3669,7 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         if not page then
             return chapter
         end
-        local number = Storage:bundleChapterAt(bundle_path, page)
-        for _, item in ipairs(page_data.chapters) do
-            if number and Storage.chapterNumberOf(item) == number then
-                return item
-            end
-        end
-        return chapter
+        return chapterByNumber(Storage:bundleChapterAt(bundle_path, page)) or chapter
     end
     -- Chương đích cũng trong tệp trọn bộ đang mở: lật trang tại chỗ.
     local function gotoInOpenBundle(target)
@@ -3816,7 +3824,13 @@ function Browser:openChapter(view, page_data, source, chapter, on_return_callbac
         Storage:saveHistory(story, chapter)
         Debug.write("Browser: chapter in bundle, opening " .. tostring(bundle_path) .. " at page " .. tostring(bundle_page))
         Reader:setPosition(bundle_path, nil)
-        Reader:setStartPage(bundle_path, bundle_page, Storage.chapterNumberOf(chapter))
+        -- Lật sang chương khác trong tệp: Lịch sử đọc ghi chương đang đọc.
+        Reader:setStartPage(bundle_path, bundle_page, Storage.chapterNumberOf(chapter), function(number)
+            local reading = chapterByNumber(number)
+            if reading then
+                Storage:saveHistory(story, reading)
+            end
+        end)
         Reader:show(bundle_path, function()
             self:showChapterList(page_data, source, on_return_callback)
         end, on_next_chapter, from_reader, on_prev_chapter)

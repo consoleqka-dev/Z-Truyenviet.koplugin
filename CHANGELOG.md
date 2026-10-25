@@ -1,3 +1,13 @@
+## 3.18.4 (BUILD-1396) - 2026-10-25
+
+### Features & Improvements
+- **Lịch sử đọc hiện chương đọc cuối**: mỗi truyện có thêm dòng thứ ba `Đang đọc: <tên chương>` (mục "Trên máy" hiện tên file đang đọc). Trước đây tên chương chỉ xuất hiện trong hộp "Đọc tiếp".
+- Đọc tệp trọn bộ mở từ Truyện Việt: lật sang chương khác thì Lịch sử đọc ghi chương đó. Nhờ vậy `Đang đọc` và `Đọc tiếp` theo đúng trang đang đọc, không dừng ở chương đã bấm lúc mở tệp.
+
+### Tests
+- `spec/story_results_test.lua`: dòng `Đang đọc` và thứ tự ưu tiên so với dòng dung lượng của Tủ truyện.
+- `spec/reader_test.lua`: báo chương khi lật trang qua ranh giới chương trong tệp trọn bộ, mỗi chương chỉ báo một lần, không báo khi mở tệp mà không có chương đích.
+
 ## 3.18.3 (BUILD-1395) - 2026-10-23
 
 ### Features & Improvements

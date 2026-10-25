@@ -293,4 +293,18 @@ assertEqual(
     "Local single file"
 )
 
+-- Dòng 3: chương đọc cuối (Lịch sử đọc) ưu tiên hơn dung lượng (Tủ truyện)
+package.preload["truyenviet/local_library"] = function()
+    return { formatSize = function(bytes) return bytes .. " B" end }
+end
+local function detailText(story)
+    return StoryResults.StoryItem.getDetailText({ story = story })
+end
+assertEqual("Đang đọc: Chương 205", detailText({ reading_chapter = "Chương 205" }), "History shows last chapter")
+assertEqual("Dung lượng: 10 B", detailText({ size_bytes = 10 }), "Library shows size")
+assertEqual("Đang đọc: Tập 3", detailText({ reading_chapter = "Tập 3", size_bytes = 10 }),
+    "Last chapter wins over size")
+assertEqual(nil, detailText({ reading_chapter = "" }), "Empty chapter title shows nothing")
+assertEqual(nil, detailText({}), "Search results have no third line")
+
 print(string.format("Story results tests passed: %d assertions", tests_run))

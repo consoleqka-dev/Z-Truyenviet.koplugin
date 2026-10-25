@@ -244,15 +244,18 @@ assertEqual(nil, Reader:positionText(download_root .. "/weebcentral/Ace-Bundle/A
 
 -- Tệp trọn bộ: sau khi KOReader khôi phục trang đọc dở, nhảy tới trang đầu chương.
 local bundle_file = download_root .. "/weebcentral/Ace-Bundle/Ace-tron-bo.cbz"
+local bundle_uis = {}
 local function openBundleUI(last_page)
     local ui = {
         {},
         menu = { registerToMainMenu = function() end },
-        registerPostInitCallback = function() end,
         document = { file = bundle_file },
         page = last_page,
         events = {},
     }
+    function ui:registerPostInitCallback(callback)
+        self.post_init = callback
+    end
     function ui:registerPostReaderReadyCallback(callback)
         self.ready = callback
     end
@@ -266,8 +269,15 @@ local function openBundleUI(last_page)
         end
     end
     Reader:initializeFromReaderUI(ui)
+    ui.post_init()
     ui.ready()
+    table.insert(bundle_uis, ui)
     return ui
+end
+-- Lật trang như KOReader: đổi trang rồi gửi PageUpdate tới listener.
+local function turnTo(ui, page)
+    ui.page = page
+    ui[2].onPageUpdate(page)
 end
 Reader:setStartPage(bundle_file, 30, 2)
 local bundle_ui = openBundleUI(5)
@@ -283,6 +293,29 @@ bundle_ui = openBundleUI(5)
 assertEqual(0, #bundle_ui.events, "Start page of another book is ignored")
 Reader:setStartPage(nil)
 
+-- Lật sang chương khác trong tệp trọn bộ: báo chương đang đọc một lần.
+local reported = {}
+Reader:setStartPage(bundle_file, 30, 2, function(number) table.insert(reported, number) end)
+bundle_ui = openBundleUI(5)
+assertEqual(0, #reported, "Jumping to the chosen chapter is not a chapter change")
+turnTo(bundle_ui, 31)
+assertEqual(0, #reported, "Turning pages inside the chapter reports nothing")
+turnTo(bundle_ui, 29)
+assertEqual(1, reported[1], "Turning back into chapter 1 reports it")
+turnTo(bundle_ui, 28)
+assertEqual(1, #reported, "Same chapter is reported once")
+turnTo(bundle_ui, 30)
+assertEqual(2, reported[2], "Turning forward reports chapter 2")
+reported = {}
+Reader:setStartPage(bundle_file, 30, 2)
+bundle_ui = openBundleUI(5)
+turnTo(bundle_ui, 1)
+assertEqual(0, #reported, "No callback when none was given")
+bundle_ui = openBundleUI(5)
+turnTo(bundle_ui, 31)
+assertEqual(0, #reported, "Bundle opened without a start page is not watched")
+bundle_ui = openBundleUI(5)
+
 ReaderUI.instance = bundle_ui
 assertEqual(5, Reader:openBookPage(bundle_file), "Current page of the open bundle")
 assertEqual(nil, Reader:openBookPage("/sdcard/other.cbz"), "No page for a book that is not open")
@@ -290,6 +323,9 @@ assertEqual(true, Reader:gotoPageInOpenBook(bundle_file, 30), "Turns the open bu
 assertEqual(30, bundle_ui.page, "In-place turn reaches the page")
 assertEqual(false, Reader:gotoPageInOpenBook("/sdcard/other.cbz", 1), "Other books are not turned")
 ReaderUI.instance = nil
+for _, ui in ipairs(bundle_uis) do
+    ui[2].onCloseWidget()
+end
 
 -- Opening a chapter from the plugin while another chapter is still open:
 -- the old reader closes after the new session started and must not end it.

@@ -106,13 +106,11 @@ local FontHelper = require("truyenviet/font_helper")
         VerticalSpan:new{ width = padding },
         self.source_widget,
     }
-    -- Dòng 3 ở Tủ truyện: dung lượng file trên máy (size_bytes do annotate tính).
-    local size_bytes = tonumber(self.story.size_bytes)
-    if size_bytes and size_bytes > 0 then
-        local LocalLibrary = require("truyenviet/local_library")
+    local detail = self:getDetailText()
+    if detail then
         table.insert(text_group, VerticalSpan:new{ width = Size.padding.small })
         table.insert(text_group, TextWidget:new{
-            text = "Dung lượng: " .. LocalLibrary.formatSize(size_bytes),
+            text = detail,
             face = FontHelper:getFace("xx_smallinfofont"),
             max_width = text_width,
         })
@@ -208,6 +206,21 @@ function StoryItem:getSourceText()
     end
     return tostring(self.story.source_name or self.story.source_id)
         .. progress .. favorite
+end
+
+-- Dòng 3: chương đọc cuối ở Lịch sử đọc (reading_chapter), dung lượng file
+-- trên máy ở Tủ truyện (size_bytes do annotate tính).
+function StoryItem:getDetailText()
+    local reading = self.story.reading_chapter
+    if type(reading) == "string" and reading ~= "" then
+        return "Đang đọc: " .. reading
+    end
+    local size_bytes = tonumber(self.story.size_bytes)
+    if size_bytes and size_bytes > 0 then
+        local LocalLibrary = require("truyenviet/local_library")
+        return "Dung lượng: " .. LocalLibrary.formatSize(size_bytes)
+    end
+    return nil
 end
 
 function StoryItem:refreshFavorite()

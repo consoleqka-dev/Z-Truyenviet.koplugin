@@ -265,7 +265,7 @@ flowchart TD
 - `Storage.readHandmadeToc(path)` đọc mục lục qua `DocSettings:findSidecarFile`/`open` (pcall; không có `docsettings` thì như cũ). `getOfflineIndex` chỉ đọc cho file không có số chương trong tên. Mục lục có ≥2 chương có số thì file là tệp trọn bộ: `index.bundles[name]` = `{number, page}` theo trang, `index.bundle_by_number[n]` = `{file, page}`. Cache còn so thời điểm sửa sidecar.
 - `isDownloaded` = `hasChapterFile` (file lẻ) hoặc `getBundleChapter`. Xóa bản tải và tự dọn chỉ dùng `hasChapterFile`.
 - Mở chương: `Reader:setStartPage(path, page, number)`, nhảy bằng `GotoPage` trong `registerPostReaderReadyCallback` (chạy sau `ReadSettings` khôi phục `last_page`), bỏ qua nếu trang đọc dở thuộc đúng chương. Chương kế/trước tính từ `Storage:bundleChapterAt(path, ui:getCurrentPage())`; cùng tệp đang mở thì `Reader:gotoPageInOpenBook`.
-- Còn lại: Lịch sử chỉ ghi chương đã bấm, không ghi chương đang đọc trong tệp; plugin chưa tự gộp CBZ.
+- Còn lại: plugin chưa tự gộp CBZ. Lịch sử ghi chương đang đọc trong tệp từ BUILD-1396 (mục 4.31).
 
 ### 4.29. Next ở cuối danh sách chương quay về mục lục
 - Nguyên nhân: `Browser:openChapter` nhận `onEndOfBook` đúng và không tìm thấy chương/trang mục lục tiếp theo, nhưng hai nhánh cuối chỉ hiện `lastChapterMessage`, để reader tiếp tục mở. Gặp ở Darwin Jihen chương 56; Back đang đặt `previous_location` nên chỉ tìm lịch sử nhảy vị trí trong sách.
@@ -278,6 +278,11 @@ flowchart TD
 - KOReader chỉ lưu một vị trí đọc cuối cho file gộp, nên không thể coi các chương trước vị trí đó là đã đọc. `ReadingProgress.observe` gắn với phiên mở từ Truyện Việt, chờ `PostReaderReady` sau khi nhảy/khôi phục trang, rồi ghi các chương thực sự hiển thị qua `PageUpdate`/`PosUpdate`/`SaveSettings`. Khóa `truyenviet_chapter_progress` trong `doc_settings` là bảng `{[tostring(số_chương)] = tỷ_lệ_0_đến_1}`; KOReader tự flush cùng metadata chuẩn, không ghi file ở mỗi lần lật trang.
 - Phần trăm trong chương tính theo khoảng trang bắt đầu của chương đến trước chương sau; chương cuối dùng tổng số trang. Chương bỏ qua không bị tự đánh dấu xong. Metadata cũ không có bảng riêng chỉ phục hồi được chương chứa `last_page`; không suy diễn lịch sử đọc các chương khác.
 - Từ BUILD-1395, `ReadingProgress.percent` trả `nil` khi chưa có dữ liệu đọc hoặc metadata hỏng; browser hiện `Đã tải · -`. Tiến độ hợp lệ bằng 0 vẫn trả số 0 và hiện `0%`. Với tệp gộp, chương chưa được ghi và không chứa `last_page` hiện `-`; không dùng phần trăm toàn tệp cho chương đó. Trạng thái chương chưa tải giữ như cũ. Kiểm thử: `reading_progress_test`, `chapter_list_flow_test`, `reader_test`, `end_of_series_test` và `offline_chapters_test`.
+
+### 4.31. Lịch sử đọc hiện chương đọc cuối (BUILD-1396)
+- Tra git: dòng phụ của Lịch sử chưa từng hiện chương; `item.chapter` vẫn được lưu nhưng chỉ dùng trong hộp "Đọc tiếp". Không phải lỗi hồi quy.
+- `Browser:showHistory` dựng bản sao từng `item.story` với `reading_chapter = item.chapter.title`. Bản sao để trường hiển thị không lọt vào bảng `history` đang sống trong settings; `saveHistory`/`favoriteRecord` vốn chỉ giữ các trường whitelist. `StoryItem:getDetailText()` hiện `Đang đọc: …` ở dòng 3, ưu tiên hơn `Dung lượng` (chỉ Tủ truyện có `size_bytes`).
+- Tệp trọn bộ: `Reader:setStartPage(path, page, number, on_chapter)`. Sau `PostReaderReady`, listener `onPageUpdate` tra `Storage:bundleChapterAt` và gọi `on_chapter(n)` khi số chương đổi. Browser ánh xạ số sang chương trong `page_data.chapters` rồi gọi `Storage:saveHistory`, tức chỉ ghi settings khi đổi chương, không ghi ở mỗi trang. Mở tệp trực tiếp từ File manager của KOReader thì không theo dõi, vì không có `start_page`.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
