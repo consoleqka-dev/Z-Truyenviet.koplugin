@@ -414,4 +414,35 @@ do
     check(gone.cover_path == nil, "nguồn đã gỡ thì không đọc bìa")
 end
 
+-- Lịch sử đọc: dòng "Đang đọc" kèm tiến độ của chương đọc cuối, chỉ khi
+-- chương đó có trên máy và đã có dữ liệu đọc.
+do
+    local LocalLibrary = require("truyenviet/local_library")
+    local StoryResults = require("truyenviet/widgets/story_results")
+    local created
+    StoryResults.new = function(_, args) created = args; return args end
+    LocalLibrary.copyFavoriteCovers = function() end
+    Storage.getHistory = function()
+        return {
+            { story = { source_id = "local", url = "/sdcard/Books/a.pdf" },
+                chapter = { title = "a.pdf", url = "/sdcard/Books/a.pdf" } },
+            { story = { source_id = "web", url = "/s/1" }, chapter = { title = "Chapter 84", url = "c84" } },
+            { story = { source_id = "web", url = "/s/2" }, chapter = { title = "Chapter 2", url = "c2" } },
+        }
+    end
+    Storage.isDownloaded = function(_, _, story) return story.url == "/s/1" end
+    metadata_exists, native_progress = true, 0.8
+    Browser:showHistory(function() end)
+    local stories = created.stories
+    check(stories[1].reading_percent == 80, "file trên máy có tiến độ đọc")
+    check(stories[2].reading_chapter == "Chapter 84" and stories[2].reading_percent == 80,
+        "chương online đã tải có tiến độ đọc")
+    check(stories[3].reading_percent == nil, "chương chưa tải không có tiến độ giả")
+    metadata_exists = false
+    Browser:showHistory(function() end)
+    check(created.stories[2].reading_percent == nil, "chưa mở chương thì không hiện phần trăm")
+    metadata_exists = true
+    Storage.isDownloaded = function() return false end
+end
+
 print(string.format("chapter_list_flow_test: %d checks passed", tests_run))

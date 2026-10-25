@@ -1,3 +1,12 @@
+## 3.18.6 (BUILD-1398) - 2026-10-25
+
+### Features & Improvements
+- **Lịch sử đọc hiện tiến độ chương đọc cuối**: dòng thứ ba thành `Đang đọc: Chapter 84 · 80%`. Tiến độ lấy cùng nguồn với nhãn `Đã tải · %` trong mục lục: chương trong tệp trọn bộ dùng tiến độ riêng của chương, chương lẻ và file "Trên máy" dùng tiến độ của cả file. Chương chưa tải hoặc chưa mở thì chỉ hiện tên chương, không hiện phần trăm giả.
+
+### Tests
+- `spec/story_results_test.lua`: định dạng `Đang đọc: … · N%`, vẫn hiện `0%`.
+- `spec/chapter_list_flow_test.lua`: Lịch sử đọc gắn tiến độ cho file trên máy và chương online đã tải; bỏ qua chương chưa tải hoặc chưa có dữ liệu đọc.
+
 ## 3.18.5 (BUILD-1397) - 2026-10-25
 
 ### Features & Improvements

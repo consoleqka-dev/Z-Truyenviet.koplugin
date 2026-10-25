@@ -288,6 +288,10 @@ flowchart TD
 - `sources/mangafreak.lua` và dòng `require` trong `source_registry.lua` được thêm thẳng trên máy (sửa lúc 19:02–19:10 ngày 23/10), ngoài git. Không có trong upstream magicxlll và không có trong transcript phiên nào, nên các lần cài từ repo (3.18.x) vẫn giữ được nguồn này chỉ vì không ghi đè file. Đã kéo về nguyên trạng (chỉ đổi CRLF→LF ở registry) và thêm spec.
 - Bài học: khi sửa plugin trực tiếp trên máy, phải kéo về repo ngay; trước khi cài bản mới, so `sources/` và `source_registry.lua` trên máy với repo.
 
+### 4.33. Tiến độ % trong Lịch sử đọc (BUILD-1398)
+- `browser.lua` có hàm cục bộ `chapterPercent(source, story, chapter, cache)`, dùng chung cho nhãn mục lục và Lịch sử đọc. Chương trong tệp trọn bộ dùng `ReadingProgress.percent(path, số chương)`, chương lẻ dùng tiến độ của cả file.
+- `showHistory` gán `reading_percent` vào bản sao truyện, chỉ khi chương có trên máy (`Storage:isDownloaded`). Mục "Trên máy" đọc thẳng `item.chapter.url`. Cache metadata sống cùng một lần mở danh sách, nên mỗi file chỉ mở sidecar một lần.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

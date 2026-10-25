@@ -213,6 +213,10 @@ end
 function StoryItem:getDetailText()
     local reading = self.story.reading_chapter
     if type(reading) == "string" and reading ~= "" then
+        local percent = tonumber(self.story.reading_percent)
+        if percent then
+            return string.format("Đang đọc: %s · %d%%", reading, percent)
+        end
         return "Đang đọc: " .. reading
     end
     local size_bytes = tonumber(self.story.size_bytes)

@@ -32,6 +32,16 @@ local Debug = require("truyenviet/debugger")
 local Util = require("truyenviet/helpers")
 local Windows = require("truyenviet/windows")
 
+-- Tiến độ đọc của chương đã tải: chương trong tệp trọn bộ lấy tiến độ riêng
+-- theo số chương, chương lẻ lấy tiến độ của cả file. nil là chưa có dữ liệu đọc.
+local function chapterPercent(source, story, chapter, cache)
+    local path = Storage:getBundleChapter(source, story, chapter)
+    if path then
+        return ReadingProgress.percent(path, Storage.chapterNumberOf(chapter), cache)
+    end
+    return ReadingProgress.percent(Builder:getExistingPath(source, story, chapter), nil, cache)
+end
+
 local function autoOpenChapter(chapters, selection)
     if type(selection) == "table" then
         return selection
@@ -2099,6 +2109,7 @@ function Browser:showHistory(on_return_callback, focus_story)
 
     local stories = {}
     local history_by_url = {}
+    local progress_cache = {}
     
     for _, item in ipairs(history) do
         -- Bản sao để hiện chương đọc cuối mà không ghi thêm trường vào lịch sử.
@@ -2107,6 +2118,14 @@ function Browser:showHistory(on_return_callback, focus_story)
             story[key] = value
         end
         story.reading_chapter = item.chapter.title
+        if LocalLibrary.isLocal(story) then
+            story.reading_percent = ReadingProgress.percent(item.chapter.url, nil, progress_cache)
+        else
+            local source = SourceRegistry:get(story.source_id)
+            if source and Storage:isDownloaded(source, story, item.chapter) then
+                story.reading_percent = chapterPercent(source, story, item.chapter, progress_cache)
+            end
+        end
         table.insert(stories, story)
         history_by_url[story.source_id .. "|" .. story.url] = item
     end
@@ -3597,14 +3616,7 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
             text = current_chapter.title,
             mandatory_func = function()
                 if not Storage:isDownloaded(source, story, current_chapter) then return "" end
-                local path = Storage:getBundleChapter(source, story, current_chapter)
-                local chapter_number
-                if path then
-                    chapter_number = Storage.chapterNumberOf(current_chapter)
-                else
-                    path = Builder:getExistingPath(source, story, current_chapter)
-                end
-                local percent = ReadingProgress.percent(path, chapter_number, progress_cache)
+                local percent = chapterPercent(source, story, current_chapter, progress_cache)
                 return percent ~= nil and string.format("Đã tải · %d%%", percent) or "Đã tải · -"
             end,
             callback = function()

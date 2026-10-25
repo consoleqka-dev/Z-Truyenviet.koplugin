@@ -1,1 +1,1 @@
-return "3.18.5 (BUILD-1397)"
+return "3.18.6 (BUILD-1398)"
