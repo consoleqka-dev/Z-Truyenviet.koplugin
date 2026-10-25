@@ -32,6 +32,49 @@ function TruyenViet:onTruyenviet()
     Browser:showRoot()
 end
 
+-- Đổi tên/dời file hay thư mục trong File manager: KOReader không phát sự
+-- kiện nào nhưng luôn gọi ReadHistory để sửa lịch sử của nó. Bọc các hàm đó
+-- (một lần cho cả phiên) để sửa luôn mục "Trên máy" trong Tủ truyện/Lịch sử.
+function TruyenViet.hookReadHistory()
+    local ok, ReadHistory = pcall(require, "readhistory")
+    if not ok or type(ReadHistory) ~= "table" or ReadHistory._truyenviet_relocate then
+        return
+    end
+    ReadHistory._truyenviet_relocate = true
+    local function relocate(old_path, new_path)
+        local LocalLibrary = require("truyenviet/local_library")
+        local relocated, err = pcall(LocalLibrary.relocate, old_path, new_path)
+        if not relocated then
+            require("truyenviet/debugger").write("[Trên máy] Không dời được: " .. tostring(err))
+        end
+    end
+    local function wrap(name, after)
+        local original = ReadHistory[name]
+        if type(original) ~= "function" then
+            return
+        end
+        ReadHistory[name] = function(self, old_path, new_path, ...)
+            local function done(...)
+                after(old_path, new_path)
+                return ...
+            end
+            return done(original(self, old_path, new_path, ...))
+        end
+    end
+    wrap("updateItem", relocate)
+    wrap("updateItemsByPath", relocate)
+    wrap("updateItems", function(files, new_dir)
+        if type(files) ~= "table" or type(new_dir) ~= "string" then
+            return
+        end
+        for file in pairs(files) do
+            if type(file) == "string" then
+                relocate(file, new_dir .. "/" .. (file:match("([^/]+)/*$") or file))
+            end
+        end
+    end)
+end
+
 function TruyenViet:init()
     local FontHelper = require("truyenviet/font_helper")
     FontHelper:setupFont()
@@ -39,6 +82,8 @@ function TruyenViet:init()
     if self.ui then
         self.ui.truyenviet = self
     end
+
+    TruyenViet.hookReadHistory()
 
     if self.ui.name == "ReaderUI" then
         Reader:initializeFromReaderUI(self.ui)

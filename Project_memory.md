@@ -301,6 +301,11 @@ flowchart TD
 - `Browser:openHistoryItem` với truyện online chỉ mở trang truyện (không chương). Muốn hỏi đọc tiếp thì gọi `Browser:confirmContinue(item, view, back, story)`: dùng ở `showHistory`, nút "▶ Tiếp tục" của `showRoot` và `main.lua` `onTruyenVietContinue` (view = nil, lỗi thì quay về `back`). `onTruyenVietBackToChapters` (về mục lục) vẫn dùng `openHistoryItem`.
 - Tìm bìa hàng loạt chỉ còn ở màn chọn nhiều của Tủ truyện (`selectFavoritesToRemove`, tiêu đề `Chọn truyện`) qua `Browser:findStoryCovers(stories, on_done)`; nút tìm bìa ở trang chủ và `findFavoriteCovers` đã bỏ. Truyện đã có bìa vẫn được tìm lại nếu được chọn.
 
+### 4.36. Mục "Trên máy" đi theo khi đổi tên/dời file (BUILD-1401)
+- KOReader không phát sự kiện khi đổi tên/dời nhưng luôn gọi `ReadHistory:updateItem(old, new)` (đổi tên, cắt–dán một mục), `updateItemsByPath(old, new)` (thư mục) và `updateItems(files_set, new_dir)` (dán nhiều mục); cả ba chỉ gọi khi di chuyển, không gọi khi sao chép. `TruyenViet.hookReadHistory()` (gọi trong `init`, cờ `ReadHistory._truyenviet_relocate` để bọc một lần) gọi hàm gốc rồi `LocalLibrary.relocate`.
+- `LocalLibrary.relocate(old, new)` so đường dẫn bằng `pathKey` (realpath, cả khi file đã mất thì dựng từ thư mục cha còn tồn tại, rồi quy `/storage/emulated/0` về `/sdcard`), vì đường dẫn khi dán đã qua realpath còn bản ghi dùng `/sdcard`. Sửa `url` (mục local), `offline_dir`, `cover_url` dạng `file://`, `chapter.url` của lịch sử; đổi tên mục chỉ khi tên đang bằng tên suy từ file cũ (`displayName`, bỏ đuôi, nguyên tên). Đổi tên file cache bìa theo `Util.stableHash(cover_url)` mới. Ghi qua `Storage:rewriteRecords(edit, edit_chapter)`: mỗi loại một lần lưu, bản dời thắng khi trùng khóa, lịch sử trùng thì giữ mục mới hơn.
+- `LocalLibrary.healMissing()` chạy đầu `showFavorites`/`showHistory`: ghi `partial_md5` (trường mới trong `favoriteRecord` và `KEPT_FAVORITE_FIELDS`) cho file local còn trên máy, rồi tìm mục file bị mất trong chính thư mục cũ: md5 trùng, hoặc đúng một file cùng đuôi có tên chứa tên kia như một cụm riêng (`containsName`, tối thiểu 3 ký tự). Bỏ qua file đã là mục khác. Dò thất bại được nhớ theo `modification` của thư mục; md5 lỗi được nhớ trong phiên.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

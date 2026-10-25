@@ -588,6 +588,7 @@ local function favoriteRecord(story)
         cover_source_id = story.cover_source_id,
         cover_found = story.cover_found,
         cover_time = story.cover_time,
+        partial_md5 = story.partial_md5,
     }
 end
 
@@ -595,7 +596,7 @@ end
 -- giá trị cũ thay vì xóa.
 local KEPT_FAVORITE_FIELDS = {
     "offline_dir", "latest_chapter", "chapter_count", "completed", "meta_time",
-    "cover_source_id", "cover_found", "cover_time", "details",
+    "cover_source_id", "cover_found", "cover_time", "details", "partial_md5",
 }
 
 -- So sánh sâu hai giá trị thuần (bảng so theo từng khóa).
@@ -794,6 +795,62 @@ function Storage:removeHistory(story)
         return persistSetting(self, "history", history)
     end
     return true
+end
+
+-- Sửa bản ghi Tủ truyện và Lịch sử đọc, mỗi loại một lần lưu.
+-- edit(record) trả về bản sao đã sửa, hoặc nil khi giữ nguyên;
+-- edit_chapter(chapter, story) tương tự cho chương của mục lịch sử.
+-- Trả về số bản ghi đã sửa.
+function Storage:rewriteRecords(edit, edit_chapter)
+    local changed = 0
+    local favorites, moved = {}, {}
+    for key, record in pairs(self:getFavorites()) do
+        local new_record = type(record) == "table" and edit(record) or nil
+        if new_record then
+            table.insert(moved, new_record)
+        else
+            favorites[key] = record
+        end
+    end
+    -- Bản ghi dời tới chỗ đã có mục khác: giữ bản dời (còn bìa, md5...).
+    for _, record in ipairs(moved) do
+        favorites[record.source_id .. "|" .. record.url] = record
+    end
+    if #moved > 0 then
+        local ok, err = persistSetting(self, "favorites", favorites)
+        if not ok then
+            return nil, err
+        end
+        changed = changed + #moved
+    end
+
+    local history, seen, history_changed = {}, {}, false
+    for _, item in ipairs(self:getHistory()) do
+        local story = edit(item.story)
+        local chapter = edit_chapter and edit_chapter(item.chapter, story or item.story)
+        if story or chapter then
+            item = copyTable(item)
+            item.story = story or item.story
+            item.chapter = chapter or item.chapter
+            history_changed = true
+            changed = changed + 1
+        end
+        -- Hai mục trùng sau khi dời: giữ mục mới đọc hơn (đứng trước).
+        local key = item.story.source_id .. "|" .. item.story.url
+        if seen[key] then
+            history_changed = true
+        else
+            seen[key] = true
+            table.insert(history, item)
+        end
+    end
+    if history_changed then
+        local ok, err = persistSetting(self, "history", history)
+        if not ok then
+            return nil, err
+        end
+    end
+    return changed
 end
 
 function Storage:clearAllHistory(with_downloads)

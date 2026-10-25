@@ -203,6 +203,14 @@ local function isOnline()
     return true
 end
 
+-- Ghi md5 cho file "Trên máy" và tìm lại file bị đổi tên ngoài KOReader.
+local function healLocalEntries()
+    local ok, err = pcall(LocalLibrary.healMissing)
+    if not ok then
+        Debug.write("[Trên máy] Không tìm lại được mục bị mất: " .. tostring(err))
+    end
+end
+
 -- Tủ truyện kèm số chương đã tải, loại mục và bìa trong cache.
 local function loadFavorites()
     return LocalLibrary.annotate(Storage:listFavorites(), SourceRegistry)
@@ -1656,6 +1664,7 @@ function Browser:showStories(title, stories, on_return_callback, options)
 end
 
 function Browser:showFavorites(on_return_callback, focus_story)
+    healLocalEntries()
     local favorites = loadFavorites()
     -- Làm mới số chương (cũ hơn 12 giờ) và bìa còn thiếu khi có mạng.
     if isOnline() then
@@ -2139,6 +2148,7 @@ function Browser:confirmContinue(item, view, back, story)
 end
 
 function Browser:showHistory(on_return_callback, focus_story)
+    healLocalEntries()
     local history = Storage:getHistory()
     if #history == 0 then
         local ConfirmBox = require("ui/widget/confirmbox")

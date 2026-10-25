@@ -1,3 +1,13 @@
+## 3.18.9 (BUILD-1401) - 2026-10-25
+
+### Bug Fixes
+- **Mục "Trên máy" báo mất sau khi đổi tên hoặc dời file**: Tủ truyện và Lịch sử đọc lưu đường dẫn tuyệt đối, nên đổi tên file (ví dụ bỏ số đầu tên một PDF) làm mục đó hiện `missing`. Giờ có hai lớp sửa:
+  - Đổi tên hoặc dời file/thư mục trong File manager của KOReader (đổi tên, cắt–dán, dán nhiều file): mục trong Tủ truyện, Lịch sử đọc, bìa và thư mục liên kết của truyện online đi theo ngay. Tên mục đổi theo tên file mới, trừ khi bạn đã tự đặt tên khác.
+  - File bị đổi tên ngoài KOReader (máy tính, app khác): khi mở Tủ truyện hoặc Lịch sử đọc, plugin tìm trong thư mục cũ file có cùng dấu vân tay nội dung (partial md5). Mục cũ chưa có dấu vân tay thì nhận khi có đúng một file cùng đuôi mà tên chứa tên cũ (hoặc ngược lại), ví dụ `713574649-How-to….pdf` → `How-to….pdf`. "Vol 1" không khớp nhầm "Vol 10". Mục thư mục không được dò.
+
+### Tests
+- `spec/local_relocate_test.lua`: đổi tên file (tên, bìa, cache bìa, lịch sử), giữ tên tự đặt, đổi tên thư mục bằng đường dẫn thật `/storage/emulated/0`, dời file, đường dẫn không liên quan; tìm lại bằng md5 và bằng tên, các trường hợp không đoán (hai ứng viên, "Vol 1"/"Vol 10", file đã có mục, mục thư mục), không dò lại thư mục không đổi; móc ReadHistory của KOReader.
+
 ## 3.18.8 (BUILD-1400) - 2026-10-25
 
 ### Bug Fixes

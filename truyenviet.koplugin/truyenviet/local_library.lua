@@ -4,6 +4,7 @@ local CoverFinder = require("truyenviet/cover_finder")
 local Debug = require("truyenviet/debugger")
 local Storage = require("truyenviet/storage")
 local Util = require("truyenviet/helpers")
+local ffiutil = require("ffi/util")
 local lfs = require("libs/libkoreader-lfs")
 
 -- Tủ truyện: mục "Trên máy" (source_id "local", url = đường dẫn tuyệt đối)
@@ -603,6 +604,318 @@ function LocalLibrary.recordRead(path)
     local title = tostring(path):match("([^/]+)$") or tostring(path)
     title = title:gsub("%.[^.]+$", "")
     return Storage:saveHistory(owner, { title = title, url = path }) == true
+end
+
+-- Khóa so sánh đường dẫn: gỡ symlink (đường dẫn KOReader đưa khi dán file
+-- đã qua realpath) kể cả khi file không còn, rồi quy về /sdcard.
+local function pathKey(path)
+    path = trimSlash(path)
+    local function canonical(value)
+        local real = ffiutil.realpath and ffiutil.realpath(value)
+        if real then
+            return trimSlash(real)
+        end
+        local parent, name = value:match("^(.+)/([^/]+)$")
+        if not parent then
+            return value
+        end
+        return canonical(parent) .. "/" .. name
+    end
+    path = canonical(path)
+    if isUnder(path, "/storage/emulated/0") then
+        path = "/sdcard" .. path:sub(#"/storage/emulated/0" + 1)
+    end
+    return path
+end
+
+local function baseName(path)
+    return trimSlash(path):match("([^/]+)$") or ""
+end
+
+local function parentDir(path)
+    return trimSlash(path):match("^(.*)/[^/]+$")
+end
+
+-- Tên mục suy ra từ tên file/thư mục, theo thứ tự ưu tiên khi đổi tên.
+local function nameVariants(path)
+    local base = baseName(path)
+    return { LocalLibrary.displayName(base), (base:gsub("%.[%w]+$", "")), base }
+end
+
+-- Tên mới khi tên cũ là tên tự đặt theo file; nil khi người dùng đã tự đổi tên.
+local function renamedTitle(title, old_path, new_path)
+    local news = nameVariants(new_path)
+    for index, name in ipairs(nameVariants(old_path)) do
+        if title == name then
+            return news[index]
+        end
+    end
+    return nil
+end
+
+local function shallowCopy(value)
+    local result = {}
+    for key, item in pairs(value) do
+        result[key] = item
+    end
+    return result
+end
+
+-- Đổi tên file bìa trong cache theo cover_url mới (khóa là hash của cover_url).
+local function moveCoverCache(old_url, new_url)
+    local dir = Storage:getCoverCacheDir()
+    local old_stem, new_stem = Util.stableHash(old_url), Util.stableHash(new_url)
+    for _, extension in ipairs(CoverCache.extensions or {}) do
+        local from = dir .. "/" .. old_stem .. "." .. extension
+        local to = dir .. "/" .. new_stem .. "." .. extension
+        if lfs.attributes(from, "mode") == "file" and not lfs.attributes(to, "mode") then
+            os.rename(from, to)
+        end
+    end
+end
+
+-- File/thư mục old_path đã được đổi tên hoặc dời tới new_path: sửa mọi mục
+-- "Trên máy" (và offline_dir, bìa file://) nằm tại hoặc bên trong nó.
+-- Trả về số bản ghi đã sửa.
+function LocalLibrary.relocate(old_path, new_path)
+    if type(old_path) ~= "string" or type(new_path) ~= "string" then
+        return 0
+    end
+    local old_key, new_key = pathKey(old_path), pathKey(new_path)
+    if old_key == new_key or old_key == "" or old_key == "/" or not parentDir(old_key) then
+        return 0
+    end
+    local renamed = parentDir(old_key) == parentDir(new_key)
+    local new_trim = trimSlash(new_path)
+
+    local function movePath(path)
+        if type(path) ~= "string" or path == "" then
+            return nil
+        end
+        local key = pathKey(path)
+        if not isUnder(key, old_key) then
+            return nil
+        end
+        local rest = key:sub(#old_key + 1)
+        local stored = trimSlash(path)
+        -- Đổi tên tại chỗ: giữ nguyên cách viết thư mục cha của bản ghi.
+        if renamed and (rest == "" or stored:sub(-#rest) == rest) then
+            local parent = parentDir(stored:sub(1, #stored - #rest))
+            if parent then
+                return parent .. "/" .. baseName(new_trim) .. rest
+            end
+        end
+        local moved = new_trim .. rest
+        if isUnder(stored, "/sdcard") and isUnder(moved, "/storage/emulated/0") then
+            moved = "/sdcard" .. moved:sub(#"/storage/emulated/0" + 1)
+        end
+        return moved
+    end
+
+    local covers = {}
+    local function editRecord(record)
+        local new_record
+        local function set(field, value)
+            new_record = new_record or shallowCopy(record)
+            new_record[field] = value
+        end
+        if LocalLibrary.isLocal(record) then
+            local url = movePath(record.url)
+            if url then
+                set("url", url)
+                local title = type(record.title) == "string"
+                    and pathKey(record.url) == old_key
+                    and renamedTitle(record.title, record.url, url)
+                if title then
+                    set("title", title)
+                end
+            end
+        end
+        local offline_dir = movePath(record.offline_dir)
+        if offline_dir then
+            set("offline_dir", offline_dir)
+        end
+        local cover_file = type(record.cover_url) == "string" and record.cover_url:match("^file://(.+)$")
+        local cover_path = movePath(cover_file)
+        if cover_path then
+            set("cover_url", "file://" .. cover_path)
+            covers[record.cover_url] = new_record.cover_url
+        end
+        if new_record then
+            new_record.cover_path = nil
+        end
+        return new_record
+    end
+
+    local function editChapter(chapter, story)
+        if not LocalLibrary.isLocal(story) then
+            return nil
+        end
+        local url = movePath(chapter.url)
+        if not url then
+            return nil
+        end
+        local new_chapter = shallowCopy(chapter)
+        new_chapter.url = url
+        local title = pathKey(chapter.url) == old_key and renamedTitle(chapter.title, chapter.url, url)
+        if title then
+            new_chapter.title = title
+        end
+        return new_chapter
+    end
+
+    local changed, err = Storage:rewriteRecords(editRecord, editChapter)
+    if not changed then
+        Debug.write("[Trên máy] Không lưu được khi dời " .. old_path .. ": " .. tostring(err))
+        return 0
+    end
+    for old_url, new_url in pairs(covers) do
+        pcall(moveCoverCache, old_url, new_url)
+    end
+    if changed > 0 then
+        Debug.write(string.format("[Trên máy] Dời %s -> %s: sửa %d bản ghi", old_path, new_path, changed))
+    end
+    return changed
+end
+
+local function partialMD5(path)
+    local ok, ko_util = pcall(require, "util")
+    if not ok or type(ko_util) ~= "table" or type(ko_util.partialMD5) ~= "function" then
+        return nil
+    end
+    local md5_ok, checksum = pcall(ko_util.partialMD5, path)
+    return md5_ok and checksum or nil
+end
+
+local function extensionOf(path)
+    local extension = baseName(path):match("%.([%w]+)$")
+    return extension and extension:lower() or nil
+end
+
+local function stemOf(path)
+    return (baseName(path):gsub("%.[%w]+$", "")):lower()
+end
+
+-- Tên này chứa tên kia như một cụm riêng: "123-abc" chứa "abc", nhưng
+-- "vol 10" không chứa "vol 1".
+local function containsName(long, short)
+    if #short < 3 then
+        return false
+    end
+    local start = long:find(short, 1, true)
+    while start do
+        local before = long:sub(start - 1, start - 1)
+        local after = long:sub(start + #short, start + #short)
+        if not before:match("%w") and not after:match("%w") then
+            return true
+        end
+        start = long:find(short, start + 1, true)
+    end
+    return false
+end
+
+-- Thư mục đã dò mà không thấy: url -> thời điểm sửa thư mục lúc dò.
+local heal_misses = {}
+-- File không đọc được md5 trong phiên này: không thử lại mỗi lần mở.
+local md5_failed = {}
+
+-- Tìm file mới của mục bị mất trong chính thư mục cũ: cùng partial md5, hoặc
+-- (không có md5) đúng một file cùng đuôi có tên chứa/nằm trong tên cũ.
+local function findRenamed(story, taken, checksums)
+    local dir = parentDir(story.url)
+    local extension = extensionOf(story.url)
+    if not dir or not extension or lfs.attributes(dir, "mode") ~= "directory" then
+        return nil
+    end
+    local modification = lfs.attributes(dir, "modification")
+    if heal_misses[story.url] == modification then
+        return nil
+    end
+    local old_stem = stemOf(story.url)
+    local by_name = {}
+    local found
+    pcall(function()
+        for name in lfs.dir(dir) do
+            local path = dir .. "/" .. name
+            if not name:find("^%.") and extensionOf(name) == extension
+                    and not taken[pathKey(path)]
+                    and lfs.attributes(path, "mode") == "file" then
+                if story.partial_md5 then
+                    if checksums[path] == nil then
+                        checksums[path] = partialMD5(path) or false
+                    end
+                    if checksums[path] == story.partial_md5 then
+                        found = path
+                        return
+                    end
+                end
+                local stem = stemOf(name)
+                if containsName(stem, old_stem) or containsName(old_stem, stem) then
+                    table.insert(by_name, path)
+                end
+            end
+        end
+    end)
+    if not found and #by_name == 1 then
+        found = by_name[1]
+    end
+    if not found then
+        heal_misses[story.url] = modification
+    end
+    return found
+end
+
+-- Mở Tủ truyện/Lịch sử đọc: ghi partial md5 cho file "Trên máy" còn trên
+-- máy, và tìm lại file đã bị đổi tên ngoài KOReader. Mục thư mục bỏ qua.
+-- Trả về số mục đã tìm lại.
+function LocalLibrary.healMissing()
+    local stories, seen, taken = {}, {}, {}
+    local function collect(story)
+        if LocalLibrary.isLocal(story) and type(story.url) == "string" then
+            taken[pathKey(story.url)] = true
+            if not seen[story.url] then
+                seen[story.url] = true
+                table.insert(stories, story)
+            end
+        end
+    end
+    local favorites = Storage:listFavorites()
+    for _, story in ipairs(favorites) do
+        collect(story)
+    end
+    for _, item in ipairs(Storage:getHistory()) do
+        collect(item.story)
+    end
+
+    local checksums = {}
+    for _, story in ipairs(favorites) do
+        if LocalLibrary.isLocal(story) and not story.partial_md5 and not md5_failed[story.url] then
+            local kind = LocalLibrary.entryType(story.url)
+            if kind and kind ~= "dir" then
+                story.partial_md5 = partialMD5(story.url)
+                if story.partial_md5 then
+                    table.insert(checksums, story)
+                else
+                    md5_failed[story.url] = true
+                end
+            end
+        end
+    end
+    if #checksums > 0 then
+        Storage:mergeFavorites(checksums)
+    end
+
+    local healed, scanned = 0, {}
+    for _, story in ipairs(stories) do
+        if not LocalLibrary.entryType(story.url) then
+            local path = findRenamed(story, taken, scanned)
+            if path and LocalLibrary.relocate(story.url, path) > 0 then
+                taken[pathKey(path)] = true
+                healed = healed + 1
+            end
+        end
+    end
+    return healed
 end
 
 -- Xóa đệ quy; trả về số file đã xóa và danh sách đường dẫn không xóa được.
