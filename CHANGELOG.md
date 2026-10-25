@@ -1,3 +1,12 @@
+## 3.18.5 (BUILD-1397) - 2026-10-25
+
+### Features & Improvements
+- **Nguồn MangaFreak (`ww3.mangafreak.me`, truyện tranh tiếng Anh)**: đưa vào repo nguồn đã chạy trên máy từ 23/10 nhưng trước đó chỉ có trên máy, chưa có trong git. Hỗ trợ tìm kiếm, Phổ biến, Mới cập nhật, Thể loại, Hoàn thành (chỉ trang đầu, do giới hạn của trang nguồn) và tải chương. Ảnh chương bị từ chối nếu thiếu trang hoặc sai thứ tự.
+
+### Tests
+- `spec/mangafreak_test.lua`: danh sách truyện và phân trang, mục lục (bỏ link lặp), ảnh chương (đủ trang, đúng thư mục, đúng thứ tự), tìm kiếm.
+- `spec/parser_test.lua`: registry có 24 nguồn dựng sẵn.
+
 ## 3.18.4 (BUILD-1396) - 2026-10-25
 
 ### Features & Improvements

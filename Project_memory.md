@@ -284,6 +284,10 @@ flowchart TD
 - `Browser:showHistory` dựng bản sao từng `item.story` với `reading_chapter = item.chapter.title`. Bản sao để trường hiển thị không lọt vào bảng `history` đang sống trong settings; `saveHistory`/`favoriteRecord` vốn chỉ giữ các trường whitelist. `StoryItem:getDetailText()` hiện `Đang đọc: …` ở dòng 3, ưu tiên hơn `Dung lượng` (chỉ Tủ truyện có `size_bytes`).
 - Tệp trọn bộ: `Reader:setStartPage(path, page, number, on_chapter)`. Sau `PostReaderReady`, listener `onPageUpdate` tra `Storage:bundleChapterAt` và gọi `on_chapter(n)` khi số chương đổi. Browser ánh xạ số sang chương trong `page_data.chapters` rồi gọi `Storage:saveHistory`, tức chỉ ghi settings khi đổi chương, không ghi ở mỗi trang. Mở tệp trực tiếp từ File manager của KOReader thì không theo dõi, vì không có `start_page`.
 
+### 4.32. Nguồn MangaFreak vào repo (BUILD-1397)
+- `sources/mangafreak.lua` và dòng `require` trong `source_registry.lua` được thêm thẳng trên máy (sửa lúc 19:02–19:10 ngày 23/10), ngoài git. Không có trong upstream magicxlll và không có trong transcript phiên nào, nên các lần cài từ repo (3.18.x) vẫn giữ được nguồn này chỉ vì không ghi đè file. Đã kéo về nguyên trạng (chỉ đổi CRLF→LF ở registry) và thêm spec.
+- Bài học: khi sửa plugin trực tiếp trên máy, phải kéo về repo ngay; trước khi cài bản mới, so `sources/` và `source_registry.lua` trên máy với repo.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

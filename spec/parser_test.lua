@@ -443,11 +443,11 @@ local ranked = SearchService:search("pham nhan", {
 assertEqual("Phàm Nhân", ranked[1].title, "Search ranks exact title first")
 assertEqual(8, #Util.stableHash("https://example.com/cover.webp"), "Cover cache hash")
 
-assertEqual(23, #SourceRegistry:listAll(), "Registry keeps all built-in sources")
+assertEqual(24, #SourceRegistry:listAll(), "Registry keeps all built-in sources")
 assertEqual(true, SourceRegistry:isEnabled("dualeo"), "DuaLeo starts enabled")
 assertEqual(true, SourceRegistry:setEnabled("dualeo", false), "DuaLeo can be disabled")
 assertEqual(false, SourceRegistry:isEnabled("dualeo"), "DuaLeo disabled state")
-assertEqual(22, #SourceRegistry:listEnabled(), "Disabled source leaves enabled list")
+assertEqual(23, #SourceRegistry:listEnabled(), "Disabled source leaves enabled list")
 assertEqual(true, SourceRegistry:setEnabled("dualeo", true), "DuaLeo can be enabled again")
 assertEqual(true, SourceRegistry:isEnabled("dualeo"), "DuaLeo enabled state restored")
 
