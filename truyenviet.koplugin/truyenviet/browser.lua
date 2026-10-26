@@ -1835,12 +1835,20 @@ function Browser:openLocalEntry(story, view, reopen)
             break
         end
     end
+    -- Tiến độ đọc từng file, chỉ đọc metadata của các dòng đang hiện.
+    local progress_cache = {}
     local list_view
     local items = {}
     for _, path in ipairs(books) do
         table.insert(items, {
             text = path:sub(#story.url + 2),
-            mandatory = path == last_read and "Đang đọc" or nil,
+            mandatory_func = function()
+                local percent = ReadingProgress.percent(path, nil, progress_cache)
+                if path == last_read then
+                    return percent ~= nil and string.format("Đang đọc · %d%%", percent) or "Đang đọc"
+                end
+                return percent ~= nil and string.format("%d%%", percent) or ""
+            end,
             callback = function()
                 closeAndRun(list_view, function()
                     self:openFolderBook(books, path)

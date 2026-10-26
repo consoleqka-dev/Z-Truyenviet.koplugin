@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.18.3` (`BUILD-1395`) |
+| **Phiên bản hiện tại** | Codebase: `v3.18.11` (`BUILD-1403`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -308,6 +308,9 @@ flowchart TD
 
 ### 4.37. Thư mục thư viện mặc định cho Kindle/Kobo (BUILD-1402)
 - `LibraryImport.libraryDirs()`: setting `local_library_dirs` → `home_dir` của KOReader → thư mục đầu tiên là `directory` trong `LibraryImport.default_library_dirs` (`/sdcard/Books`, `/mnt/us/documents`, `/mnt/onboard`) → `/sdcard/Books`. Trường cũ `default_library_dir` đã bỏ. Kobo quét từ gốc `/mnt/onboard`; thư mục ẩn (`.kobo`, `.adds`) đã bị bỏ qua khi quét.
+
+### 4.38. Tiến độ đọc trong danh sách tập "Trên máy" (BUILD-1403)
+- `Browser:openLocalEntry` (thư mục) dùng `mandatory_func` gọi `ReadingProgress.percent(path, nil, progress_cache)` cho từng file: `N%`, hoặc `Đang đọc · N%` với file đọc cuối theo Lịch sử đọc. Cache sống cùng một lần mở danh sách; Menu chỉ gọi hàm cho các dòng của trang đang hiện, nên thư mục vài trăm file không đọc hết metadata một lúc.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

@@ -541,4 +541,34 @@ do
     os.remove = os_remove
 end
 
+-- Thư mục "Trên máy": mỗi file hiện tiến độ đọc, file đọc cuối thêm "Đang đọc".
+do
+    local LocalLibrary = require("truyenviet/local_library")
+    local DocSettings = require("docsettings")
+    local dir = "/sdcard/Books/GK"
+    local read = { [dir .. "/chapter-001.cbz"] = 1, [dir .. "/chapter-002.cbz"] = 0.2 }
+    local find_sidecar, open = DocSettings.findSidecarFile, DocSettings.open
+    DocSettings.findSidecarFile = function(_, path) return read[path] and path .. ".sdr/metadata.lua" end
+    DocSettings.open = function(_, path)
+        return { readSetting = function(_, key)
+            if key == "percent_finished" then return read[path] end
+        end }
+    end
+    LocalLibrary.entryType = function() return "dir" end
+    LocalLibrary.listBooks = function()
+        return { dir .. "/chapter-001.cbz", dir .. "/chapter-002.cbz", dir .. "/chapter-003.cbz" }
+    end
+    Storage.getHistory = function()
+        return { { story = { source_id = "local", url = dir },
+            chapter = { title = "chapter-002", url = dir .. "/chapter-002.cbz" } } }
+    end
+    Browser:openLocalEntry({ source_id = "local", url = dir, title = "GK" }, nil, function() end)
+    flush()
+    local items = lastView().item_table
+    check(items[1].text == "chapter-001.cbz" and items[1].mandatory_func() == "100%", "file đã đọc hiện 100%")
+    check(items[2].mandatory_func() == "Đang đọc · 20%", "file đọc cuối hiện tiến độ")
+    check(items[3].mandatory_func() == "", "file chưa mở để trống")
+    DocSettings.findSidecarFile, DocSettings.open = find_sidecar, open
+end
+
 print(string.format("chapter_list_flow_test: %d checks passed", tests_run))

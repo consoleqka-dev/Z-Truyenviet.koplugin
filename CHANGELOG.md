@@ -1,3 +1,11 @@
+## 3.18.11 (BUILD-1403) - 2026-10-26
+
+### Bug Fixes
+- **Danh sách tập của thư mục "Trên máy" không hiện tiến độ đọc**: các file đã đọc xong vẫn để trống, chỉ file đọc cuối có chữ `Đang đọc`. Giờ mỗi file hiện phần trăm KOReader đã lưu (`100%` khi đọc xong), file đọc cuối hiện `Đang đọc · N%`. File chưa mở vẫn để trống. Tiến độ chỉ đọc cho các dòng đang hiện trên trang.
+
+### Tests
+- `spec/chapter_list_flow_test.lua`: thư mục "Trên máy" hiện `100%` cho file đã đọc, `Đang đọc · 20%` cho file đọc cuối, để trống file chưa mở.
+
 ## 3.18.10 (BUILD-1402) - 2026-10-25
 
 ### Bug Fixes
