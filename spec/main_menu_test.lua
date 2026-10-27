@@ -146,4 +146,37 @@ end
 assert(plugin_titles[pos - 1] == "Terminal", "Truyện Việt must sort after Terminal")
 assert(plugin_titles[pos + 1] == "Tweak document settings", "Truyện Việt must sort before Tweak document settings")
 
+-- "Danh sách chương" khi đang mở sách ngoài plugin: đóng sách trước rồi mới mở.
+local ReaderUI = { instance = { file = "/sdcard/Books/Manga/GK/chapter-125.cbz" } }
+package.preload["apps/reader/readerui"] = function() return ReaderUI end
+package.preload["truyenviet/storage"] = function()
+    return { getHistory = function() return {} end }
+end
+package.preload["truyenviet/local_library"] = function() return {} end
+local Reader = require("truyenviet/reader")
+local close_callbacks = {}
+Reader.active = false
+function Reader:returnToPlugin(callback)
+    table.insert(close_callbacks, callback or false)
+end
+browser_show_root_called = false
+Plugin:onTruyenVietBackToChapters()
+assert(#close_callbacks == 1 and close_callbacks[1], "Chapter list must close an outside book first")
+assert(browser_show_root_called == false, "Chapter list must wait for the book to close")
+ReaderUI.instance = nil
+close_callbacks[1]()
+assert(browser_show_root_called == true, "Chapter list opens after the book closed")
+
+-- Không có sách nào mở: mở ngay, không đóng gì.
+browser_show_root_called = false
+Plugin:onTruyenVietBackToChapters()
+assert(#close_callbacks == 1, "Nothing open: nothing to close")
+assert(browser_show_root_called == true, "Nothing open: chapter list opens at once")
+
+-- Chương của plugin: về đúng màn trước của chương.
+Reader.active = true
+ReaderUI.instance = {}
+Plugin:onTruyenVietBackToChapters()
+assert(#close_callbacks == 2 and close_callbacks[2] == false, "Plugin chapter returns to its own screen")
+
 print("Main menu & ZenOS launcher compatibility tests passed!")

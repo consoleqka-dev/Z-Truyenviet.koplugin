@@ -1,1 +1,1 @@
-return "3.18.11 (BUILD-1403)"
+return "3.18.12 (BUILD-1404)"

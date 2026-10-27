@@ -1,3 +1,13 @@
+## 3.18.12 (BUILD-1404) - 2026-10-27
+
+### Bug Fixes
+- **Về menu Truyện Việt mà sách vẫn mở bên dưới**: file "Trên máy" (và chương KOReader tự mở tiếp khi đọc hết file trước, sách mở từ File manager hay Lịch sử của KOReader) không được tính là chương của plugin, nên trang chủ mở đè lên sách còn đang chạy, còn `Quay lại Truyện Việt` không làm gì. Giờ mở trang chủ (nút trên thanh tiêu đề, mục `Mở Truyện Việt`, cử chỉ) hoặc `Danh sách chương` sẽ đóng mọi sách đang mở trước (KOReader lưu vị trí đọc). `Quay lại Truyện Việt` với sách ngoài plugin đóng sách rồi mở trang chủ; với chương của plugin vẫn về màn trước như cũ. Sách không đóng được (KOReader hỏi lưu thay đổi) thì chỉ thử một lần rồi vẫn mở trang chủ.
+
+### Tests
+- `spec/single_window_test.lua`: trang chủ đóng cả sách mở ngoài plugin, chỉ thử đóng một lần.
+- `spec/reader_test.lua`: `returnToPlugin` đóng sách ngoài plugin; `Quay lại Truyện Việt` mở trang chủ với sách ngoài plugin, về màn trước với chương của plugin.
+- `spec/main_menu_test.lua`: `Danh sách chương` đóng sách ngoài plugin trước khi mở.
+
 ## 3.18.11 (BUILD-1403) - 2026-10-26
 
 ### Bug Fixes

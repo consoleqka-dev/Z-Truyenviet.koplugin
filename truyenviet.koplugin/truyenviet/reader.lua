@@ -334,7 +334,12 @@ function Reader:addToMainMenu(menu_items)
         text = "Quay lại Truyện Việt",
         sorting_hint = "main",
         callback = function()
-            self:returnToPlugin()
+            -- Sách mở ngoài plugin không có màn để quay về: đóng sách, mở trang chủ.
+            if self.active then
+                self:returnToPlugin()
+            else
+                require("truyenviet/browser"):showRoot()
+            end
         end,
     }
     if self.on_next_chapter_callback then
@@ -361,9 +366,11 @@ function Reader:addToMainMenu(menu_items)
     end
 end
 
+-- Đóng sách đang mở rồi chạy callback_override (hoặc màn quay về của chương).
+-- Sách mở ngoài plugin (file "Trên máy", File manager) cũng được đóng.
 function Reader:returnToPlugin(callback_override)
     Debug.write("Reader:returnToPlugin called")
-    if self.returning or not self.active then
+    if self.returning or not (self.active or ReaderUI.instance) then
         Debug.write("Reader:returnToPlugin early return, returning=" .. tostring(self.returning) .. ", active=" .. tostring(self.active))
         return
     end

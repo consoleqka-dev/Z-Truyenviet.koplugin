@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.18.11` (`BUILD-1403`) |
+| **Phiên bản hiện tại** | Codebase: `v3.18.12` (`BUILD-1404`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -311,6 +311,11 @@ flowchart TD
 
 ### 4.38. Tiến độ đọc trong danh sách tập "Trên máy" (BUILD-1403)
 - `Browser:openLocalEntry` (thư mục) dùng `mandatory_func` gọi `ReadingProgress.percent(path, nil, progress_cache)` cho từng file: `N%`, hoặc `Đang đọc · N%` với file đọc cuối theo Lịch sử đọc. Cache sống cùng một lần mở danh sách; Menu chỉ gọi hàm cho các dòng của trang đang hiện, nên thư mục vài trăm file không đọc hết metadata một lúc.
+
+### 4.39. Về menu Truyện Việt thì đóng mọi sách đang mở (BUILD-1404)
+- File "Trên máy" mở qua `Browser:openEbookFile` (gọi thẳng `ReaderUI:showReader`), và file KOReader tự mở tiếp khi hết sách, không bật `Reader.active`. Vì vậy trước đây `showRoot` (chỉ đóng khi `Reader.active`) mở đè lên sách.
+- Nay `Reader:returnToPlugin` chạy khi `Reader.active` hoặc có `ReaderUI.instance`. `Browser:showRoot(reader_closed)` đóng mọi `ReaderUI.instance` rồi gọi lại chính nó với `reader_closed = true`, nên chỉ thử đóng một lần. `onTruyenVietBackToChapters` đóng sách ngoài plugin trước khi mở mục lục. `Quay lại Truyện Việt` (`Reader:addToMainMenu`) với sách ngoài plugin gọi `Browser:showRoot()` (require muộn để tránh vòng require).
+- Lịch sử đọc, Tủ truyện, Tải về... mở từ menu reader vẫn nằm đè lên sách; chọn chương trong đó thì `Reader:show` đóng sách.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

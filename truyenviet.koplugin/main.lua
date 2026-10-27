@@ -401,7 +401,9 @@ function TruyenViet:onTruyenVietBackToChapters()
     local ReaderUI = require("apps/reader/readerui")
     if Reader.active and ReaderUI.instance then
         Reader:returnToPlugin()
-    else
+        return
+    end
+    local function openLatest()
         local Storage = require("truyenviet/storage")
         local LocalLibrary = require("truyenviet/local_library")
         local history = Storage:getHistory()
@@ -419,6 +421,12 @@ function TruyenViet:onTruyenVietBackToChapters()
         elseif not Browser:openHistoryItem(latest, back) then
             Browser:showHistory(back)
         end
+    end
+    -- Sách mở ngoài plugin: đóng trước, danh sách chương không nằm đè lên sách.
+    if ReaderUI.instance then
+        Reader:returnToPlugin(openLatest)
+    else
+        openLatest()
     end
 end
 

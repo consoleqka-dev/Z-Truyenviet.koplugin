@@ -219,6 +219,51 @@ end)
 assertEqual(0, normal_count, "Next chapter skips normal return callback")
 assertEqual(1, next_count, "Runs next chapter callback")
 
+-- Sách mở ngoài plugin (file "Trên máy", File manager): vẫn đóng được.
+local outside_closed = 0
+local after_close = 0
+Reader.active = false
+ReaderUI.instance = {
+    onClose = function()
+        outside_closed = outside_closed + 1
+        ReaderUI.instance = nil
+    end,
+}
+Reader:returnToPlugin(function()
+    after_close = after_close + 1
+end)
+assertEqual(1, outside_closed, "Closes a book opened outside the plugin")
+assertEqual(1, after_close, "Runs the callback after closing an outside book")
+assertEqual(false, Reader.active, "Outside book leaves no session")
+Reader:returnToPlugin(function()
+    after_close = after_close + 1
+end)
+assertEqual(1, after_close, "Nothing open: no close, no callback")
+
+-- "Quay lại Truyện Việt": chương của plugin về màn trước, sách ngoài plugin mở trang chủ.
+local roots = 0
+package.loaded["truyenviet/browser"] = {
+    showRoot = function()
+        roots = roots + 1
+    end,
+}
+local menu_items = {}
+Reader:addToMainMenu(menu_items)
+local chapter_returns = 0
+Reader.active = true
+Reader.on_return_callback = function()
+    chapter_returns = chapter_returns + 1
+end
+ReaderUI.instance = { onClose = function() ReaderUI.instance = nil end }
+menu_items.go_back_to_truyenviet.callback()
+assertEqual(1, chapter_returns, "Back from a plugin chapter returns to its screen")
+assertEqual(0, roots, "Back from a plugin chapter skips the home screen")
+ReaderUI.instance = { onClose = function() ReaderUI.instance = nil end }
+menu_items.go_back_to_truyenviet.callback()
+assertEqual(1, roots, "Back from an outside book opens the home screen")
+package.loaded["truyenviet/browser"] = nil
+ReaderUI.instance = nil
+
 Reader:setPosition("/sdcard/truyenviet/truyenqq/story/chap-14.html", "Chương 14/20")
 assertEqual("Chương 14/20", Reader:positionText("/sdcard/truyenviet/truyenqq/story/chap-14.html"),
     "Shows position for the file it was set for")

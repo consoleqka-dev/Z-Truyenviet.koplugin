@@ -148,9 +148,22 @@ ReaderUI.instance = nil
 returns[1]()
 check(#stack == 1 and Windows.count() == 1, "opens a single home window after the chapter closed")
 
--- Sách mở ngoài plugin (Lịch sử KOReader...) không bị đóng.
+-- Sách mở ngoài plugin (file "Trên máy", Lịch sử KOReader...) cũng đóng trước.
 ReaderUI.instance = {}
 Browser:showRoot()
-check(#returns == 1 and #stack == 1, "leaves books opened outside the plugin alone")
+check(#returns == 2, "closes a book opened outside the plugin first")
+check(#stack == 1, "waits for the outside book to close before opening home")
+ReaderUI.instance = nil
+returns[2]()
+check(#stack == 1 and Windows.count() == 1, "opens home after the outside book closed")
+
+-- Sách không đóng được (KOReader hỏi lưu thay đổi): chỉ thử một lần rồi mở trang chủ.
+ReaderUI.instance = {}
+Browser:showRoot()
+check(#returns == 3, "tries to close the book")
+returns[3]()
+check(#returns == 3, "does not retry closing the book")
+check(#stack == 1 and Windows.count() == 1, "opens home even if the book stayed open")
+ReaderUI.instance = nil
 
 print(string.format("single_window_test: %d checks passed", passed))

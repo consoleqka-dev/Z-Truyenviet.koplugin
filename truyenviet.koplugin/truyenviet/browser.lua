@@ -683,14 +683,16 @@ function Browser:showStoryActions(story, source, refresh_callback)
     UIManager:show(dialog)
 end
 
-function Browser:showRoot()
-    -- Chỉ một phiên Truyện Việt: đang đọc chương của plugin thì đóng chương
-    -- (KOReader lưu vị trí đọc) rồi mới mở trang chủ, và đóng mọi cửa sổ cũ.
+function Browser:showRoot(reader_closed)
+    -- Chỉ một phiên Truyện Việt: đang mở sách (chương của plugin, file "Trên
+    -- máy" hay sách mở từ KOReader) thì đóng sách (KOReader lưu vị trí đọc) rồi
+    -- mới mở trang chủ, và đóng mọi cửa sổ cũ. Chỉ thử đóng một lần: sách còn
+    -- mở (KOReader hỏi lưu thay đổi) thì vẫn mở trang chủ.
     local ReaderUI = require("apps/reader/readerui")
-    if Reader.active and ReaderUI.instance then
-        Debug.write("Browser:showRoot closing the open chapter first")
+    if ReaderUI.instance and not reader_closed then
+        Debug.write("Browser:showRoot closing the open book first")
         Reader:returnToPlugin(function()
-            self:showRoot()
+            self:showRoot(true)
         end)
         return
     end
