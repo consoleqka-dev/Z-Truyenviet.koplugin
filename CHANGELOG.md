@@ -1,3 +1,11 @@
+## 3.19.2 (BUILD-1407) - 2026-10-27
+
+### Features & Improvements
+- **Mở truyện tại trang có chương đọc cuối**: mở truyện từ Tủ truyện (hoặc bấm `Mục lục`/`Danh sách tập`), danh sách chương nhảy thẳng đến trang có chương đọc cuối theo Lịch sử đọc và tô đậm dòng đó, thay vì luôn mở trang 1. Áp dụng cho thư mục "Trên máy" và mục lục truyện online. Truyện online khớp chương theo URL, nếu nguồn đổi tên miền thì khớp theo số chương. Chương đọc cuối không nằm trong trang mục lục đang tải thì vẫn mở trang đầu như cũ.
+
+### Tests
+- `spec/chapter_list_flow_test.lua`: danh sách tập "Trên máy" đặt dòng hiện tại là file đọc cuối; mục lục online khớp theo URL, theo số chương khi đổi tên miền, không chọn khi chương không có trong trang hoặc truyện chưa đọc.
+
 ## 3.19.1 (BUILD-1406) - 2026-10-27
 
 ### Bug Fixes

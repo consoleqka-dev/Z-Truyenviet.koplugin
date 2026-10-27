@@ -42,6 +42,15 @@ local function chapterPercent(source, story, chapter, cache)
     return ReadingProgress.percent(Builder:getExistingPath(source, story, chapter), nil, cache)
 end
 
+-- Chương đọc cuối của truyện theo Lịch sử đọc (nil nếu chưa đọc).
+local function lastReadChapter(story)
+    for _, item in ipairs(Storage:getHistory()) do
+        if item.story.source_id == story.source_id and item.story.url == story.url then
+            return item.chapter
+        end
+    end
+end
+
 local function autoOpenChapter(chapters, selection)
     if type(selection) == "table" then
         return selection
@@ -1835,13 +1844,8 @@ function Browser:openLocalEntry(story, view, reopen)
         return
     end
     -- Đánh dấu tập đọc gần nhất (Lịch sử đọc ghi lại khi mở file).
-    local last_read
-    for _, item in ipairs(Storage:getHistory()) do
-        if item.story.source_id == story.source_id and item.story.url == story.url then
-            last_read = item.chapter.url
-            break
-        end
-    end
+    local last_read = lastReadChapter(story)
+    last_read = last_read and last_read.url
     -- Tiến độ đọc từng file, chỉ đọc metadata của các dòng đang hiện.
     local progress_cache = {}
     local list_view
@@ -1862,6 +1866,10 @@ function Browser:openLocalEntry(story, view, reopen)
                 end)
             end,
         })
+        -- Menu mở sẵn trang có tập đọc cuối và tô đậm dòng đó.
+        if path == last_read then
+            items.current = #items
+        end
     end
     closeAndRun(view, function()
         list_view = showView(story.title, items, reopen)
@@ -3639,8 +3647,20 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
         })
     end
 
+    -- Mục lục mở sẵn trang có chương đọc cuối (khớp URL, rồi số chương).
+    local last_read = lastReadChapter(story)
+    local last_number = last_read and Storage.chapterNumberOf(last_read)
+    local by_number
     for _, chapter in ipairs(page_data.chapters) do
         local current_chapter = chapter
+        if last_read and not items.current then
+            if chapter.url == last_read.url then
+                items.current = #items + 1
+            elseif not by_number and last_number
+                    and Storage.chapterNumberOf(chapter) == last_number then
+                by_number = #items + 1
+            end
+        end
         table.insert(items, {
             text = current_chapter.title,
             mandatory_func = function()
@@ -3662,6 +3682,8 @@ function Browser:buildChapterItems(page_data, source, on_return_callback)
             end,
         })
     end
+
+    items.current = items.current or by_number
 
     if #page_data.chapters == 0 then
         table.insert(items, {

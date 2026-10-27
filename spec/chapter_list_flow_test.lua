@@ -131,6 +131,7 @@ local favorite_updates = 0
 local Storage = stub({
     isFavorite = function() return true end,
     isDownloaded = function() return false end,
+    getHistory = function() return {} end,
     updateFavorite = function() favorite_updates = favorite_updates + 1 end,
 })
 
@@ -568,6 +569,7 @@ do
     check(items[1].text == "chapter-001.cbz" and items[1].mandatory_func() == "100%", "file đã đọc hiện 100%")
     check(items[2].mandatory_func() == "Đang đọc · 20%", "file đọc cuối hiện tiến độ")
     check(items[3].mandatory_func() == "", "file chưa mở để trống")
+    check(items.current == 2, "danh sách tập mở sẵn trang có file đọc cuối")
     DocSettings.findSidecarFile, DocSettings.open = find_sidecar, open
 end
 
@@ -622,6 +624,26 @@ do
     check(list._closed_by_uimanager, "đóng danh sách đang hiện bìa cũ")
     check(reopened == versus, "mở lại Tủ truyện tại truyện vừa tìm bìa")
     Browser.showFavorites = show_favorites
+end
+
+-- Mục lục online mở sẵn trang có chương đọc cuối: khớp URL, không thì khớp số chương.
+do
+    local chapters = chapterList(40)
+    local story_b = { source_id = "src", url = "https://a.test/b", title = "B" }
+    local function current(chapter)
+        Storage.getHistory = function()
+            return chapter and { { story = story_b, chapter = chapter } } or {}
+        end
+        Storage.chapterNumberOf = function(item) return tonumber(item.title:match("%d+")) end
+        local items = Browser:buildChapterItems({ story = story_b, chapters = chapters,
+            page = 1, total_pages = 1 }, source, function() end)
+        return items.current and items[items.current].text
+    end
+    check(current({ title = "Chương 30", url = "c30" }) == "Chương 30", "khớp chương đọc cuối theo URL")
+    check(current({ title = "Chương 25", url = "https://old.test/c25" }) == "Chương 25",
+        "đổi tên miền thì khớp theo số chương")
+    check(current({ title = "Chương 99", url = "c99" }) == nil, "chương không có trong trang thì mở trang đầu")
+    check(current(nil) == nil, "chưa đọc thì mở trang đầu")
 end
 
 print(string.format("chapter_list_flow_test: %d checks passed", tests_run))

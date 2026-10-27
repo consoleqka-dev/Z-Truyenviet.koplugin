@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.19.0` (`BUILD-1405`) |
+| **Phiên bản hiện tại** | Codebase: `v3.19.2` (`BUILD-1407`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -328,6 +328,9 @@ flowchart TD
 ### 4.41. Tìm lại ảnh bìa lớn thì mở lại danh sách (BUILD-1406)
 - `StoryItem:init` (`widgets/story_results.lua`) dựng `ImageWidget` từ `story.cover_path` một lần; `StoryResults:refreshFavorites()` chỉ cập nhật dòng chữ, không vẽ lại ảnh. Vì vậy nút `Tìm lại ảnh bìa lớn` trong `Browser:showStoryActions` gọi `refresh_callback("cover_changed")`, và `showStories` xử lý giá trị này bằng `closeAndRun(view, reopen(story))` (Tủ truyện gọi lại `showFavorites` để đọc `cover_url`/`cover_path` mới từ Storage).
 - Mục "Trên máy" không bị lỗi này vì `showLocalEntryActions` vốn mở lại danh sách sau khi tìm ảnh bìa.
+
+### 4.42. Mở danh sách chương tại chương đọc cuối (BUILD-1407)
+- `lastReadChapter(story)` trong `browser.lua` lấy `chapter` của mục Lịch sử đọc cùng `source_id` và `url`. `openLocalEntry` và `buildChapterItems` đặt `items.current` là chỉ số dòng đó: `Menu:init` của KOReader mở trang `getPageNumber(item_table.current)` và tô đậm dòng. Mục lục online khớp `chapter.url` trước, sau đó `Storage.chapterNumberOf`. `refreshChapterView` vẫn gọi `switchItemTable(..., -1)` nên làm mới nền giữ trang đang xem.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
