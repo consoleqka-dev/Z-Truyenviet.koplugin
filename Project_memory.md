@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.18.12` (`BUILD-1404`) |
+| **Phiên bản hiện tại** | Codebase: `v3.19.0` (`BUILD-1405`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -316,6 +316,14 @@ flowchart TD
 - File "Trên máy" mở qua `Browser:openEbookFile` (gọi thẳng `ReaderUI:showReader`), và file KOReader tự mở tiếp khi hết sách, không bật `Reader.active`. Vì vậy trước đây `showRoot` (chỉ đóng khi `Reader.active`) mở đè lên sách.
 - Nay `Reader:returnToPlugin` chạy khi `Reader.active` hoặc có `ReaderUI.instance`. `Browser:showRoot(reader_closed)` đóng mọi `ReaderUI.instance` rồi gọi lại chính nó với `reader_closed = true`, nên chỉ thử đóng một lần. `onTruyenVietBackToChapters` đóng sách ngoài plugin trước khi mở mục lục. `Quay lại Truyện Việt` (`Reader:addToMainMenu`) với sách ngoài plugin gọi `Browser:showRoot()` (require muộn để tránh vòng require).
 - Lịch sử đọc, Tủ truyện, Tải về... mở từ menu reader vẫn nằm đè lên sách; chọn chương trong đó thì `Reader:show` đóng sách.
+
+### 4.40. Nguồn MangaDex (BUILD-1405)
+- `sources/mangadex.lua` có `Source.create(lang)`, chép hàm vào từng bảng nguồn; file trả nguồn `mangadex` (vi), còn `sources/mangadex_en.lua` gọi `create("en")`. Truyện: `https://mangadex.org/title/<uuid>`, chương: `https://mangadex.org/chapter/<uuid>/chapter-N` (đoạn cuối để Storage đặt tên tệp dễ đọc).
+- Quy định API: User-Agent không được giả trình duyệt (dùng `TruyenViet-KOReader/<version>`), khoảng 5 request/giây/IP, `/at-home/server` 40 lần/phút, `offset + limit <= 10000`. Vì vậy `meta_concurrency = 2` và mục lục lấy `/feed` mỗi lần 500 chương.
+- Bẫy dữ liệu: `availableTranslatedLanguage`/`hasAvailableChapters` vẫn tính chương link ngoài và chương đã bị gỡ. VD One Piece vi chỉ có MangaPlus, Frieren và Giant Killing không còn chương. Lọc bằng `includeExternalUrl=0`, `includeEmptyPages=0`, và báo lỗi rõ khi rỗng.
+- Không sắp xếp theo `order[volume]`: chương chưa có tập bị xếp cuối. Sắp xếp tại chỗ theo số chương.
+- Node MangaDex@Home trả 404 nếu thiếu `Referer: https://mangadex.org/`; `uploads.mangadex.org/data/...` không cần.
+- JSON `null` của KOReader không phải `nil`: mọi trường đọc qua `str()`/`type(...) == "table"`. `spec/support/mini_json.lua` giải `null` thành giá trị đặc biệt để test bắt lỗi này.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

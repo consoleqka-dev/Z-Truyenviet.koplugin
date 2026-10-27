@@ -166,6 +166,8 @@ Chạy kiểm thử parser độc lập:
 ```sh
 luajit spec/akaytruyen_test.lua
 luajit scripts/akaytruyen_live_test.lua
+luajit spec/mangadex_test.lua
+luajit scripts/mangadex_live_test.lua
 luajit spec/conduongbachu_test.lua
 luajit spec/cover_cache_test.lua
 luajit spec/search_service_test.lua

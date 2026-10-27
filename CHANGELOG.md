@@ -1,3 +1,15 @@
+## 3.19.0 (BUILD-1405) - 2026-10-27
+
+### Features
+- **Nguồn MangaDex**: thêm hai nguồn truyện tranh `MangaDex (Tiếng Việt)` và `MangaDex (English)`, dùng API JSON chính thức `api.mangadex.org` nên không phải phân tích HTML. Có đủ tìm kiếm, Truyện phổ biến (theo lượt theo dõi), Mới cập nhật, Hoàn thành, 70+ thể loại, chi tiết truyện (tác giả, họa sĩ, mô tả, trạng thái) và số chương/chương mới nhất trong kết quả tìm kiếm.
+- Khi nhiều nhóm dịch đăng cùng một chương, mục lục chỉ giữ một bản, ưu tiên nhóm dịch nhiều chương nhất của truyện. Chương chỉ có liên kết ngoài (MangaPlus...) hoặc 0 trang bị bỏ. Truyện không còn chương đọc được theo ngôn ngữ của nguồn sẽ báo rõ lý do.
+- Ảnh chương tải từ node MangaDex@Home kèm `Referer` (node trả 404 nếu thiếu), dự phòng bằng `uploads.mangadex.org` rồi bản nén data-saver. Mọi request gửi User-Agent riêng của plugin theo quy định API, và chỉ lấy truyện nhãn `safe`/`suggestive`.
+
+### Tests
+- `spec/mangadex_test.lua`: chọn tên theo ngôn ngữ, `null` của JSON, phân trang và giới hạn 10.000 kết quả, bỏ trùng và sắp xếp chương (kể cả chương lẻ và oneshot), URL ảnh dự phòng, lỗi API, meta từ `/aggregate`, thể loại và chi tiết truyện.
+- `scripts/mangadex_live_test.lua`: smoke test trên API thật (14 request).
+- `spec/support/mini_json.lua`: bộ giải mã JSON cho test trên máy tính.
+
 ## 3.18.12 (BUILD-1404) - 2026-10-27
 
 ### Bug Fixes

@@ -28,6 +28,8 @@ local BUILTIN_SOURCES = {
     require("truyenviet/sources/zettruyen"),
     require("truyenviet/sources/weebcentral"),
     require("truyenviet/sources/mangafreak"),
+    require("truyenviet/sources/mangadex"),
+    require("truyenviet/sources/mangadex_en"),
 }
 
 local SOURCES = {}
