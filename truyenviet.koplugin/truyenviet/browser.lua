@@ -669,7 +669,7 @@ function Browser:showStoryActions(story, source, refresh_callback)
                                 Storage:addFavorite(story)
                             end
                         end)
-                        if refresh_callback then refresh_callback(true) end
+                        if refresh_callback then refresh_callback("cover_changed") end
                     end)
                 end,
             }
@@ -1654,6 +1654,11 @@ function Browser:showStories(title, stories, on_return_callback, options)
                             reopen(story)
                         end)
                     end
+                elseif is_favorite == "cover_changed" then
+                    -- Mục trong danh sách đã dựng ảnh bìa cũ: mở lại để vẽ bìa mới.
+                    closeAndRun(view, function()
+                        reopen(story)
+                    end)
                 elseif options.favorites_only and not is_favorite then
                     view:removeStory(story)
                 else

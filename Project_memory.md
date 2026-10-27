@@ -325,6 +325,10 @@ flowchart TD
 - Node MangaDex@Home trả 404 nếu thiếu `Referer: https://mangadex.org/`; `uploads.mangadex.org/data/...` không cần.
 - JSON `null` của KOReader không phải `nil`: mọi trường đọc qua `str()`/`type(...) == "table"`. `spec/support/mini_json.lua` giải `null` thành giá trị đặc biệt để test bắt lỗi này.
 
+### 4.41. Tìm lại ảnh bìa lớn thì mở lại danh sách (BUILD-1406)
+- `StoryItem:init` (`widgets/story_results.lua`) dựng `ImageWidget` từ `story.cover_path` một lần; `StoryResults:refreshFavorites()` chỉ cập nhật dòng chữ, không vẽ lại ảnh. Vì vậy nút `Tìm lại ảnh bìa lớn` trong `Browser:showStoryActions` gọi `refresh_callback("cover_changed")`, và `showStories` xử lý giá trị này bằng `closeAndRun(view, reopen(story))` (Tủ truyện gọi lại `showFavorites` để đọc `cover_url`/`cover_path` mới từ Storage).
+- Mục "Trên máy" không bị lỗi này vì `showLocalEntryActions` vốn mở lại danh sách sau khi tìm ảnh bìa.
+
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 
 ### Các hạng mục ĐÃ XỬ LÝ TRIỆT ĐỂ (BUILD-1370 & BUILD-1372):

@@ -571,4 +571,57 @@ do
     DocSettings.findSidecarFile, DocSettings.open = find_sidecar, open
 end
 
+-- Tủ truyện: "Tìm lại ảnh bìa lớn" tìm được bìa thì mở lại danh sách (giữ vị
+-- trí truyện) để vẽ bìa mới, không chỉ đổi dòng chữ của mục.
+do
+    local LocalLibrary = require("truyenviet/local_library")
+    local SourceRegistry = require("truyenviet/source_registry")
+    local StoryResults = require("truyenviet/widgets/story_results")
+    package.preload["datastorage"] = package.preload["datastorage"] or function()
+        return { getFullDataDir = function() return "/sdcard/koreader" end }
+    end
+    package.preload["truyenviet/library_import"] = function()
+        return { libraryDirs = function() return {} end }
+    end
+    LocalLibrary.collectDownloadTargets = function(stories) return { targets = {}, stories = stories } end
+    LocalLibrary.countFiles = function() return 0 end
+    LocalLibrary.sizeOf = function() return 0 end
+    LocalLibrary.formatSize = function() return "0 B" end
+    LocalLibrary.findCovers = function(stories)
+        for _, item in ipairs(stories) do
+            item.cover_found = true
+            item.cover_path = "/covers/new.jpg"
+        end
+        return stories
+    end
+    SourceRegistry.get = function(_, id)
+        if id == "web" then return { id = "web", name = "Web" } end
+    end
+    local created
+    StoryResults.new = function(_, args) created = args; return args end
+    local reopened
+    local show_favorites = Browser.showFavorites
+    Browser.showFavorites = function(_, _, focus_story) reopened = focus_story end
+
+    local versus = { source_id = "web", url = "/s/versus", title = "Versus" }
+    Browser:showStories("Tủ truyện", { versus }, function() end, { favorites_only = true })
+    local list = created
+    list.story_hold_callback(versus)
+    local find_button
+    for _, row in ipairs(lastView().buttons or {}) do
+        for _, button in ipairs(row) do
+            if button.text == "Tìm lại ảnh bìa lớn" then
+                find_button = button
+            end
+        end
+    end
+    check(find_button ~= nil, "Tủ truyện có nút tìm lại bìa lớn")
+    find_button.callback()
+    flush()
+    check(versus.cover_found and versus.cover_path == "/covers/new.jpg", "tìm được bìa mới")
+    check(list._closed_by_uimanager, "đóng danh sách đang hiện bìa cũ")
+    check(reopened == versus, "mở lại Tủ truyện tại truyện vừa tìm bìa")
+    Browser.showFavorites = show_favorites
+end
+
 print(string.format("chapter_list_flow_test: %d checks passed", tests_run))

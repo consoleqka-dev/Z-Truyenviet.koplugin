@@ -1,3 +1,11 @@
+## 3.19.1 (BUILD-1406) - 2026-10-27
+
+### Bug Fixes
+- **Tủ truyện không hiện ảnh bìa mới sau `Tìm lại ảnh bìa lớn`**: tìm được ảnh nhưng danh sách vẫn giữ ảnh bìa cũ (hoặc ô trống) vì mục trong danh sách chỉ dựng ảnh bìa một lần lúc mở. Giờ tìm xong, Tủ truyện (và danh sách truyện) tự mở lại tại đúng truyện đó để vẽ ảnh bìa mới.
+
+### Tests
+- `spec/chapter_list_flow_test.lua`: `Tìm lại ảnh bìa lớn` trong Tủ truyện lưu ảnh bìa rồi mở lại Tủ truyện tại truyện vừa tìm.
+
 ## 3.19.0 (BUILD-1405) - 2026-10-27
 
 ### Features
