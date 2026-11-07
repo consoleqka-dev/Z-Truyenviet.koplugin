@@ -13,7 +13,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | **Phiên bản hiện tại** | Codebase: `v3.19.3` (`BUILD-1408`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
-| **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
+| **Kho lưu trữ Git** | Push lên `origin` = `consoleqka-dev/Z-Truyenviet.koplugin` (nhánh `main`); `upstream` = `magicxlll/Z-Truyenviet.koplugin` (tác giả gốc, nguồn OTA, không push). Xem `AGENTS.md` |
 | **Build Artifact** | `dist/truyenviet.koplugin.zip` |
 
 ---
@@ -392,27 +392,5 @@ flowchart TD
 
 ## 7. Quy trình Vận hành Chuẩn (Runbook & Workflow)
 
-### Quy trình Bắt buộc sau mỗi lần Debug App:
-```mermaid
-flowchart LR
-    A["1. Sửa lỗi & Verify"] --> B["2. Syntax & Unit Test"]
-    B --> C["3. Build App\n(./scripts/build.sh)"]
-    C --> D["4. Cập nhật\nProject_memory.md"]
-    D --> E["5. Git Commit & Push\n(Tóm tắt version)"]
-```
-
-1. **Kiểm tra cú pháp & kiểm thử:**
-   ```sh
-   find truyenviet.koplugin -name "*.lua" -exec luajit -b {} /dev/null \;
-   ```
-2. **Đóng gói bản phát hành:**
-   ```sh
-   ./scripts/build.sh
-   # Sinh ra: dist/truyenviet.koplugin.zip
-   ```
-3. **Commit & Push Git:**
-   ```sh
-   git add truyenviet.koplugin/ dist/truyenviet.koplugin.zip Project_memory.md CHANGELOG.md
-   git commit -m "fix/feat: <mô tả ngắn gọn về sửa lỗi và phiên bản>"
-   git push origin main
-   ```
+Quy trình sau mỗi lần sửa mã (kiểm tra cú pháp, chạy test, tăng phiên bản, build,
+commit và push), cách push và cách cài thử lên Boox nằm trong `AGENTS.md`.

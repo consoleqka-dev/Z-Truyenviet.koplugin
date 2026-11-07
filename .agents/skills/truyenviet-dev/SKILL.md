@@ -59,26 +59,6 @@ Khi viết test trong `spec/`:
 
 ## 4. QUY TẮC BẮT BUỘC SAU MỖI LẦN DEBUG APP
 
-Sau khi hoàn thành bất kỳ phiên debug hoặc sửa lỗi nào trên plugin:
-
-1. **Kiểm tra cú pháp toàn bộ file Lua:**
-   ```sh
-   find truyenviet.koplugin -name "*.lua" -exec luajit -b {} /dev/null \;
-   ```
-2. **Build đóng gói ứng dụng:**
-   ```sh
-   ./scripts/build.sh
-   ```
-   Lệnh này sẽ cập nhật gói phát hành `dist/truyenviet.koplugin.zip`.
-
-3. **Cập nhật Bộ nhớ Dự án:**
-   - Mở `Project_memory.md`.
-   - Cập nhật bài học kinh nghiệm, nguyên nhân lỗi và cách giải quyết vào mục tương ứng.
-   - Nếu có tăng build/version, cập nhật đồng bộ tại `truyenviet/version.lua` và `CHANGELOG.md`.
-
-4. **Commit và Push lên Git với tóm tắt phiên bản:**
-   ```sh
-   git add -A
-   git commit -m "fix/feat: <Tóm tắt ngắn gọn lỗi đã fix hoặc tính năng mới> (<Phiên bản/BUILD>)"
-   git push origin main
-   ```
+Làm theo mục "Quy trình bắt buộc sau mỗi thay đổi mã plugin" trong `AGENTS.md`
+ở gốc repo (kiểm tra cú pháp, chạy test, tăng phiên bản, build, commit và push).
+Mục Git và cách cài lên Boox cũng nằm ở đó.

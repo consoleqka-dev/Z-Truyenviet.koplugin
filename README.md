@@ -161,27 +161,14 @@ truyenviet.koplugin/
 ./scripts/build.sh
 ```
 
-Chạy kiểm thử parser độc lập:
+Chạy toàn bộ unit test (từ gốc repo, cần `luajit`):
 
 ```sh
-luajit spec/akaytruyen_test.lua
-luajit scripts/akaytruyen_live_test.lua
-luajit spec/mangadex_test.lua
-luajit scripts/mangadex_live_test.lua
-luajit spec/conduongbachu_test.lua
-luajit spec/cover_cache_test.lua
-luajit spec/search_service_test.lua
-lua spec/parser_test.lua
-lua spec/chapter_downloader_test.lua
-lua spec/storage_test.lua
-lua spec/story_results_test.lua
-lua spec/reader_test.lua
-luajit spec/end_of_series_test.lua
-luajit spec/reading_progress_test.lua
-lua spec/document_builder_test.lua
-lua spec/image_utils_test.lua
-lua spec/compile_test.lua .
+for f in spec/*_test.lua; do luajit "$f" >/dev/null || echo "FAIL $f"; done
 ```
+
+Test gọi website thật nằm ở `scripts/*_live_test.lua`, ví dụ
+`luajit scripts/mangadex_live_test.lua`.
 
 Các parser specs dùng Busted nằm tại `spec/parser_spec.lua`.
 

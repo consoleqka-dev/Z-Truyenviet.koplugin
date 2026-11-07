@@ -1,27 +1,10 @@
 ---
 trigger: always_on
-description: Mandatory workflow to build and push to git after debugging the app
+description: Mandatory workflow to test, build and push to git after changing the plugin
 ---
 
-# Mandatory Post-Debug Workflow
+# Mandatory Post-Change Workflow
 
-Whenever debugging, fixing bugs, or implementing changes in `Z-Truyenviet.koplugin`:
-
-1. **Syntax Check**:
-   ```sh
-   find truyenviet.koplugin -name "*.lua" -exec luajit -b {} /dev/null \;
-   ```
-2. **Build App**:
-   ```sh
-   ./scripts/build.sh
-   ```
-   Ensures `dist/truyenviet.koplugin.zip` is re-generated.
-3. **Update Documentation**:
-   Record status and lessons learned in `Project_memory.md`.
-4. **Git Commit & Push**:
-   Commit the build archive and modified code with a descriptive commit summary of the version/fix and push to remote:
-   ```sh
-   git add -A
-   git commit -m "fix/feat: <summary of changes and version/build>"
-   git push origin main
-   ```
+Read and follow `AGENTS.md` at the repository root. It is the single source for
+the post-change workflow (syntax check, tests, version bump, build, commit and
+push), the Git remotes and push credentials, and installing on the Boox over adb.
