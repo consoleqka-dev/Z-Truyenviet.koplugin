@@ -10,7 +10,7 @@ Tài liệu lưu trữ bộ nhớ dự án, tổng hợp kiến trúc, tình tr�
 | :--- | :--- |
 | **Tên Plugin** | `truyenviet` (Hiển thị: *Truyện Việt*) |
 | **Mục tiêu** | Tìm kiếm, duyệt danh mục, tải về và đọc truyện chữ / truyện tranh trực tiếp từ các website truyện Việt Nam trên máy đọc sách chạy KOReader (Kindle, Kobo, Android, v.v.). |
-| **Phiên bản hiện tại** | Codebase: `v3.19.2` (`BUILD-1407`) |
+| **Phiên bản hiện tại** | Codebase: `v3.19.3` (`BUILD-1408`) |
 | **Ngôn ngữ & Runtime** | LuaJIT (tương thích môi trường Lua 5.1/LuaJIT của KOReader) |
 | **Async Engine** | Copas 4.x + LuaSocket + Timerwheel + Binaryheap |
 | **Kho lưu trữ Git** | `https://github.com/magicxlll/Z-Truyenviet.koplugin.git` (nhánh `main`) |
@@ -331,6 +331,11 @@ flowchart TD
 
 ### 4.42. Mở danh sách chương tại chương đọc cuối (BUILD-1407)
 - `lastReadChapter(story)` trong `browser.lua` lấy `chapter` của mục Lịch sử đọc cùng `source_id` và `url`. `openLocalEntry` và `buildChapterItems` đặt `items.current` là chỉ số dòng đó: `Menu:init` của KOReader mở trang `getPageNumber(item_table.current)` và tô đậm dòng. Mục lục online khớp `chapter.url` trước, sau đó `Storage.chapterNumberOf`. `refreshChapterView` vẫn gọi `switchItemTable(..., -1)` nên làm mới nền giữ trang đang xem.
+
+### 4.43. Chỉ giữ màn hình sáng trong lúc tải nền (BUILD-1408)
+- Trên Boox Poke3, kernel autosleep (`sys.onyx.idledelay=3000`) cho CPU ngủ 3 s sau lần chạm cuối, nên tải nền khi rút sạc chậm khoảng 5 lần. Bật "Keep screen on" của KOReader cả ngày thì khắc phục được, nhưng đo batterystats cho thấy pin tụt 2–4,4%/giờ, so với 0,2–0,5%/giờ khi không giữ màn hình.
+- `DownloadJob.start` gọi `android.timeout.set(-1)` (`AKEEP_SCREEN_ON_ENABLED`, launcher đặt `FLAG_KEEP_SCREEN_ON`). `finish` (xong, lỗi, hủy, treo, Exit) trả lại giá trị `android_screen_timeout` theo đúng logic khởi động của `frontend/device/android/device.lua`: số dương chỉ áp dụng khi có quyền `settings`, ngược lại về `0` (cài đặt hệ thống).
+- Không đụng tới màn hình khi người dùng đã chọn Keep screen on (`-1`) hoặc khi `android.needsWakelocks()` (KOReader tự giữ màn hình). Ngoài Android thì `require("android")` lỗi và mọi thứ là no-op.
 
 ## 5. Nợ Kỹ thuật & Tồn đọng (Technical Debt)
 

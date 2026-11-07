@@ -1,3 +1,11 @@
+## 3.19.3 (BUILD-1408) - 2026-11-07
+
+### Features & Improvements
+- **Chỉ giữ màn hình sáng trong lúc tải nền (Android)**: khi tải chương nền, plugin tự giữ màn hình sáng để máy (đặc biệt là Boox) không cho CPU ngủ giữa chừng làm tải chậm. Tải xong, lỗi, bị hủy hoặc bị treo thì trả lại thời gian tắt màn hình đã chọn trong KOReader. Vì vậy không cần bật "Keep screen on" cả ngày nữa (đo trên Boox Poke3: để màn hình luôn sáng tụt 2–4,4% pin mỗi giờ, so với 0,2–0,5% mỗi giờ khi không giữ). Nếu bạn vẫn chọn "Keep screen on" thì plugin không thay đổi gì.
+
+### Tests
+- `spec/download_job_test.lua`: giữ màn hình sáng khi bắt đầu tải và trả lại khi xong, hủy, treo; không đụng tới khi người dùng chọn Keep screen on hoặc máy cần wakelock; trả lại thời gian tự chọn khi có quyền, về cài đặt hệ thống khi không có quyền.
+
 ## 3.19.2 (BUILD-1407) - 2026-10-27
 
 ### Features & Improvements

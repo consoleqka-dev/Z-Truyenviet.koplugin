@@ -89,6 +89,20 @@ package.preload["truyenviet/debugger"] = function()
     return { write = function() end }
 end
 
+-- Android giả: ghi lại các lần đặt thời gian tắt màn hình.
+local timeout_calls = {}
+local has_settings_permission = false
+local android = {
+    timeout = { set = function(value) table.insert(timeout_calls, value) end },
+    settings = { hasPermission = function() return has_settings_permission end },
+    needsWakelocks = function() return false end,
+}
+package.preload["android"] = function() return android end
+local saved_settings = {}
+G_reader_settings = {
+    readSetting = function(_, key) return saved_settings[key] end,
+}
+
 local DownloadJob = require("truyenviet/download_job")
 local tests_run = 0
 local function check(condition, message)
@@ -135,6 +149,7 @@ check(DownloadJob.start{
     on_done = function(ok, result, err) got = { ok = ok, result = result, err = err } end,
 }, "chạy nền được")
 check(DownloadJob.isRunning(), "đang chạy")
+check(#timeout_calls == 1 and timeout_calls[1] == -1, "giữ màn hình sáng khi bắt đầu tải")
 check(#updates == 1 and updates[1].done == 0 and updates[1].total == 5, "báo ngay khi bắt đầu, đăng ký trùng chỉ tính một")
 
 -- Việc thứ hai bị từ chối khi đang bận.
@@ -154,6 +169,7 @@ check(got and got.ok and got.result.first_path == "/x/c1.html", "nhận kết qu
 check(got.result.fn == nil and got.result.errors[1] == "C2: lỗi", "kết quả thuần")
 check(not DownloadJob.isRunning() and DownloadJob.status() == nil, "xong thì hết việc")
 check(updates[#updates] == false, "subscriber nhận nil khi xong")
+check(#timeout_calls == 2 and timeout_calls[2] == 0, "xong thì trả màn hình về cài đặt hệ thống")
 check(not exists(progress_path), "xóa file tiến độ")
 check(children[next_pid].reaped and children[next_pid].read, "thu dọn tiến trình con")
 DownloadJob.unsubscribe(subscriber)
@@ -189,6 +205,7 @@ DownloadJob.cancel("exit")
 check(cleaned == 1, "hủy lần hai không làm gì")
 runUntil(clock + 3)
 check(got and got.ok == false and got.err == "exit", "on_done nhận lý do hủy")
+check(timeout_calls[#timeout_calls] == 0, "hủy thì trả lại thời gian tắt màn hình")
 check(children[d_pid].read, "đọc nốt pipe sau khi hủy")
 
 -- Treo: không có tiến độ mới quá stall_timeout.
@@ -204,6 +221,7 @@ DownloadJob.start{
 runUntil(clock + 10)
 check(got and got.ok == false and tostring(got.err):find("treo"), "treo thì tự hủy")
 check(cleaned == 1 and children[next_pid].killed, "treo thì dọn và kết thúc")
+check(timeout_calls[#timeout_calls] == 0, "treo thì trả lại thời gian tắt màn hình")
 children.delay = nil
 
 -- Tiến trình con thoát mà không ghi gì.
@@ -225,6 +243,35 @@ started, reason = DownloadJob.start{ key = "g", total = 1, progress_path = progr
 check(started == false and reason == "fork", "fork lỗi trả false")
 check(not DownloadJob.isRunning(), "fork lỗi không giữ việc")
 fork_fails = false
+
+-- Thời gian tắt màn hình theo cài đặt KOReader của người dùng.
+local function runJob(key)
+    timeout_calls = {}
+    children.delay = 1
+    DownloadJob.start{ key = key, total = 1, progress_path = progress_path, task = function() return {} end }
+    runUntil(clock + 5)
+    children.delay = nil
+    return timeout_calls
+end
+
+check(#runJob("h") == 2, "chưa chọn gì thì giữ sáng rồi trả về hệ thống")
+
+saved_settings.android_screen_timeout = -1
+check(#runJob("i") == 0, "người dùng đã chọn Keep screen on thì không đụng tới")
+
+saved_settings.android_screen_timeout = 600000
+has_settings_permission = true
+local calls = runJob("j")
+check(calls[1] == -1 and calls[2] == 600000, "trả lại thời gian tự chọn khi có quyền")
+
+has_settings_permission = false
+calls = runJob("k")
+check(calls[1] == -1 and calls[2] == 0, "không có quyền thì trả về cài đặt hệ thống")
+
+saved_settings.android_screen_timeout = nil
+android.needsWakelocks = function() return true end
+check(#runJob("l") == 0, "máy cần wakelock thì KOReader tự giữ màn hình")
+android.needsWakelocks = function() return false end
 
 os.remove(progress_path)
 print(string.format("download_job_test: %d checks passed", tests_run))

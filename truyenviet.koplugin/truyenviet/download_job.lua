@@ -4,6 +4,57 @@ local Util = require("truyenviet/helpers")
 local ffiutil = require("ffi/util")
 
 local has_buffer, buffer = pcall(require, "string.buffer")
+local has_android, android = pcall(require, "android")
+
+-- Trên Boox, CPU ngủ vài giây sau lần chạm cuối nên tải nền chậm hẳn khi
+-- không cắm sạc. Chỉ giữ màn hình sáng trong lúc tải, xong thì trả lại thời
+-- gian tắt màn hình người dùng chọn: để "Keep screen on" cả ngày rất hao pin.
+-- Giá trị là AKEEP_SCREEN_ON_ENABLED / AKEEP_SCREEN_ON_DISABLED của launcher.
+local KEEP_SCREEN_ON = -1
+local SYSTEM_TIMEOUT = 0
+
+local function userScreenTimeout()
+    return G_reader_settings and G_reader_settings:readSetting("android_screen_timeout")
+end
+
+local function canManageScreen()
+    if not has_android or type(android) ~= "table" or type(android.timeout) ~= "table" then
+        return false
+    end
+    -- Máy cần wakelock thì KOReader đã luôn giữ màn hình sáng.
+    if android.needsWakelocks and android.needsWakelocks() then
+        return false
+    end
+    return true
+end
+
+local function holdScreenOn()
+    if not canManageScreen() or userScreenTimeout() == KEEP_SCREEN_ON then
+        return false
+    end
+    local ok, err = pcall(android.timeout.set, KEEP_SCREEN_ON)
+    if not ok then
+        Debug.write("[Tải nền] Không giữ được màn hình sáng: " .. tostring(err))
+    end
+    return ok
+end
+
+-- Giống cách KOReader áp dụng thời gian tắt màn hình lúc khởi động.
+local function releaseScreen()
+    local timeout = userScreenTimeout()
+    if timeout == KEEP_SCREEN_ON then
+        return
+    end
+    if type(timeout) ~= "number" or timeout <= SYSTEM_TIMEOUT
+        or not (android.settings and android.settings.hasPermission("settings"))
+    then
+        timeout = SYSTEM_TIMEOUT
+    end
+    local ok, err = pcall(android.timeout.set, timeout)
+    if not ok then
+        Debug.write("[Tải nền] Không trả lại được thời gian tắt màn hình: " .. tostring(err))
+    end
+end
 
 -- Tải chương trong tiến trình con (fork) để giao diện chính không bị chặn,
 -- kể cả khi đang đọc truyện khác. Tiến trình con ghi tiến độ ra một file nhỏ
@@ -104,6 +155,10 @@ local function finish(job, ok, result, err)
         active = nil
     end
     UIManager:unschedule(job.poll)
+    if job.holds_screen then
+        job.holds_screen = false
+        releaseScreen()
+    end
     os.remove(job.progress_path)
     os.remove(job.progress_path .. ".tmp")
     notify(nil)
@@ -232,6 +287,7 @@ function DownloadJob.start(opts)
         idle = 0,
     }
     active = job
+    job.holds_screen = holdScreenOn()
     Debug.write(string.format("[Tải nền] Bắt đầu %s (%d chương), pid=%s", tostring(job.key), job.progress.total, tostring(pid)))
 
     job.poll = function()
